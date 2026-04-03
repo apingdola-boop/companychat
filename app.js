@@ -957,7 +957,10 @@
 
   function registerSw() {
     if (!('serviceWorker' in navigator)) return;
-    navigator.serviceWorker.register('./sw.js').catch(() => {});
+    navigator.serviceWorker
+      .register('./sw.js', { updateViaCache: 'none', scope: './' })
+      .then((reg) => reg.update())
+      .catch(() => {});
   }
 
   function requestNotifyPermission() {
