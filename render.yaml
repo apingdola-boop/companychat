@@ -1,0 +1,12 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+# GitHub main 브랜치 푸시 후 Render에서 "Blueprint"로 이 저장소 연결
+services:
+  - type: web
+    name: companychat
+    runtime: node
+    plan: free
+    region: singapore
+    branch: main
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
