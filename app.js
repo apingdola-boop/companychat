@@ -3114,12 +3114,20 @@
       render();
     }
 
+    const msgInput = document.getElementById('msg-input');
     document.getElementById('btn-send').addEventListener('click', send);
-    document.getElementById('msg-input').addEventListener('keydown', (e) => {
+    msgInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         send();
       }
+    });
+    msgInput.addEventListener('focus', () => {
+      requestAnimationFrame(() => {
+        try {
+          msgInput.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        } catch (_) {}
+      });
     });
   }
 

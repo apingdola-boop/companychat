@@ -743,6 +743,7 @@ h1 {
 }
 
 .chat-header {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -834,6 +835,7 @@ h1 {
 }
 
 .chat-mod-row {
+  flex-shrink: 0;
   display: flex;
   gap: 0.45rem;
   padding: 0 0.5rem 0.55rem;
@@ -864,6 +866,7 @@ h1 {
 }
 
 .room-notice-banner {
+  flex-shrink: 0;
   padding: 0.55rem 0.85rem;
   background: rgba(61, 94, 254, 0.12);
   border-bottom: 1px solid var(--border);
@@ -890,6 +893,7 @@ h1 {
 }
 
 .chat-lock-hint {
+  flex-shrink: 0;
   padding: 0.45rem 0.75rem;
   font-size: 0.72rem;
   color: var(--muted);
@@ -898,8 +902,8 @@ h1 {
 }
 
 .input-bar--locked {
-  opacity: 0.55;
-  pointer-events: none;
+  opacity: 0.65;
+  /* disabled 속성으로 입력 막힘 — pointer-events:none 은 iOS 등에서 포커스·접근성 문제 유발 */
 }
 
 .video-call-overlay {
@@ -1240,23 +1244,29 @@ h1 {
 }
 
 .input-bar {
+  flex-shrink: 0;
+  position: relative;
+  z-index: 2;
   display: flex;
   align-items: flex-end;
   gap: 0.4rem;
   padding: 0.5rem 0.6rem calc(0.5rem + var(--safe-bottom));
   border-top: 1px solid var(--border);
   background: var(--surface);
+  touch-action: manipulation;
 }
 
 .input-bar textarea {
   flex: 1;
-  min-height: 42px;
+  min-width: 0;
+  min-height: 44px;
   max-height: 120px;
   resize: none;
   border-radius: 12px;
   border: 1px solid var(--border);
   background: var(--bg);
   padding: 0.6rem 0.75rem;
+  font-size: 1rem;
   line-height: 1.35;
   color: #f0f2f5;
   caret-color: #8ea9ff;
@@ -1594,6 +1604,7 @@ h1 {
 }
 
 .ann-bar {
+  flex-shrink: 0;
   background: rgba(255, 109, 0, 0.15);
   border-bottom: 1px solid var(--supervisor);
   padding: 0.5rem 1rem;
