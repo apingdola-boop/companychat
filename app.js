@@ -2899,7 +2899,7 @@
             <span>🖼</span>
             <input type="file" id="file-img" accept="image/*"${ivBlocked ? ' disabled' : ''} />
           </label>
-          <textarea id="msg-input" rows="1" placeholder="메시지 입력…"${ivBlocked ? ' disabled' : ''}></textarea>
+          <textarea id="msg-input" rows="1" placeholder="메시지 입력…" autocomplete="off" autocorrect="on" autocapitalize="sentences" inputmode="text" enterkeyhint="send"${ivBlocked ? ' disabled' : ''}></textarea>
           <button type="button" class="send" id="btn-send"${ivBlocked ? ' disabled' : ''}>전송</button>
         </div>`;
 
@@ -3122,13 +3122,30 @@
         send();
       }
     });
-    msgInput.addEventListener('focus', () => {
+    function scrollInputIntoViewForKeyboard() {
       requestAnimationFrame(() => {
         try {
-          msgInput.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+          msgInput.scrollIntoView({ block: 'end', inline: 'nearest', behavior: 'smooth' });
+        } catch (_) {}
+        try {
+          const vv = window.visualViewport;
+          if (!vv) return;
+          const bar = msgInput.closest('.input-bar');
+          if (!bar) return;
+          const rect = bar.getBoundingClientRect();
+          const obscured = rect.bottom > vv.height - 8;
+          if (obscured) {
+            window.scrollBy(0, rect.bottom - vv.height + 16);
+          }
         } catch (_) {}
       });
-    });
+    }
+    msgInput.addEventListener('focus', scrollInputIntoViewForKeyboard);
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', () => {
+        if (document.activeElement === msgInput) scrollInputIntoViewForKeyboard();
+      });
+    }
   }
 
   async function init() {

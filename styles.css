@@ -23,14 +23,26 @@
   box-sizing: border-box;
 }
 
+html {
+  height: -webkit-fill-available;
+}
+
 html,
 body {
   margin: 0;
   min-height: 100%;
+  min-height: 100dvh;
+  min-height: -webkit-fill-available;
   height: 100%;
   background: var(--bg);
   color: var(--text);
   -webkit-tap-highlight-color: transparent;
+}
+
+/* 모바일: 본문 스크롤로 입력창이 뷰포트 밖으로 밀리지 않게 — 내부 .messages 만 스크롤 */
+body.body--app-shell {
+  overflow: hidden;
+  overscroll-behavior: none;
 }
 
 button,
@@ -44,11 +56,17 @@ textarea {
 .app {
   max-width: 480px;
   margin: 0 auto;
+  box-sizing: border-box;
   min-height: 100%;
+  min-height: 100dvh;
+  min-height: -webkit-fill-available;
   height: 100%;
+  max-height: 100dvh;
+  max-height: -webkit-fill-available;
   display: flex;
   flex-direction: column;
   background: var(--bg);
+  overflow: hidden;
 }
 
 .screen {
@@ -984,6 +1002,10 @@ h1 {
 
 .chat-screen-wrap.screen {
   padding: 0;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .chat-layout {
@@ -1000,6 +1022,7 @@ h1 {
   flex-direction: column;
   min-height: 0;
   min-width: 0;
+  overflow: hidden;
 }
 
 .chat-side-backdrop {
@@ -1245,8 +1268,9 @@ h1 {
 
 .input-bar {
   flex-shrink: 0;
-  position: relative;
-  z-index: 2;
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
   display: flex;
   align-items: flex-end;
   gap: 0.4rem;
@@ -1254,6 +1278,7 @@ h1 {
   border-top: 1px solid var(--border);
   background: var(--surface);
   touch-action: manipulation;
+  box-shadow: 0 -4px 18px rgba(0, 0, 0, 0.22);
 }
 
 .input-bar textarea {
@@ -1266,11 +1291,14 @@ h1 {
   border: 1px solid var(--border);
   background: var(--bg);
   padding: 0.6rem 0.75rem;
-  font-size: 1rem;
+  /* iOS: 16px 미만이면 포커스 시 페이지 확대 → 키보드/레이아웃 깨짐 방지 */
+  font-size: 16px;
   line-height: 1.35;
   color: #f0f2f5;
   caret-color: #8ea9ff;
   -webkit-text-fill-color: #f0f2f5;
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 .input-bar textarea::placeholder {
