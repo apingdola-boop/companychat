@@ -685,12 +685,18 @@
         return;
       }
       realtimeSocket.on('shared:state', (payload) => {
+        const hadMe = !!state.me;
         applySharedPayload(payload);
         realtimeSyncedFromServer = true;
         realtimeConnectError = '';
         syncSessionMeWithAccounts();
+        const lostSession = hadMe && !state.me;
         try {
-          render();
+          if (!lostSession && shouldPatchLoginInsteadOfRender()) {
+            patchLoginSocketUiOnly();
+          } else {
+            render();
+          }
         } catch (_) {
           /* render 아직 정의 전일 수 있음 — 무시 */
         }
@@ -700,19 +706,31 @@
       realtimeSocket.on('connect', () => {
         realtimeConnectError = '';
         try {
-          render();
+          if (shouldPatchLoginInsteadOfRender()) {
+            patchLoginSocketUiOnly();
+          } else {
+            render();
+          }
         } catch (_) {}
       });
       realtimeSocket.on('disconnect', () => {
         try {
-          render();
+          if (shouldPatchLoginInsteadOfRender()) {
+            patchLoginSocketUiOnly();
+          } else {
+            render();
+          }
         } catch (_) {}
       });
       realtimeSocket.on('connect_error', (err) => {
         const msg = err && err.message ? err.message : 'connect_error';
         realtimeConnectError = `${msg} (시도: ${lastSocketConnectBase})`;
         try {
-          render();
+          if (shouldPatchLoginInsteadOfRender()) {
+            patchLoginSocketUiOnly();
+          } else {
+            render();
+          }
         } catch (_) {}
       });
     });
@@ -1133,15 +1151,15 @@
     updateShellClasses();
   }
 
-  function loginHTML() {
+  function buildLoginSocketPanelHtml() {
     const socketOk = !!(realtimeSocket && realtimeSocket.connected);
     const explicit = getExplicitSocketBaseUrl();
     const attempt = lastSocketConnectBase || resolveSocketBaseUrl() || `${window.location.protocol}//${window.location.host}`;
     const errBlock = realtimeConnectError
       ? `<p class="hint socket-setup-error" role="alert">${escapeHtml(realtimeConnectError)}</p>`
       : '';
-    const socketPanel = !socketOk
-      ? `<div class="socket-setup">
+    if (!socketOk) {
+      return `<div class="socket-setup">
         <p class="hint"><strong>실시간 서버에 연결되지 않았습니다.</strong> (여러 PC·폰에서 같이 채팅하려면 필요합니다.)</p>
         <ul class="hint socket-setup-list">
           <li><strong>권장:</strong> 이 폴더에서 터미널로 <code>npm start</code> 실행 후, 주소창에 <code>http://127.0.0.1:8787/</code> 를 직접 입력해 접속합니다.</li>
@@ -1160,20 +1178,26 @@
         </div>
         <button type="button" class="btn btn-secondary" id="btn-socket-reconnect">주소 저장 후 다시 연결</button>
         <p class="hint socket-setup-attempt">현재 연결 시도: <code>${escapeHtml(attempt)}</code></p>
-      </div>`
-      : `<p class="hint socket-setup-ok">실시간 서버 연결됨 · 시도 주소 <code>${escapeHtml(attempt)}</code></p>`;
+      </div>`;
+    }
+    return `<p class="hint socket-setup-ok">실시간 서버 연결됨 · 시도 주소 <code>${escapeHtml(attempt)}</code></p>`;
+  }
 
-    const storageHint = socketOk
+  function loginSyncHintText() {
+    const socketOk = !!(realtimeSocket && realtimeSocket.connected);
+    return socketOk
       ? '계정·채팅 내용은 연결된 서버와 동기화되며, 로그인 정보만 이 브라우저에 있습니다.'
       : '지금은 실시간에 실패한 상태입니다. 로그인·채팅은 이 브라우저 저장소를 쓰며, 서버와 합치지 못할 수 있습니다.';
+  }
 
+  function loginHTML() {
     return `
       <div class="screen login-panel">
         <h1>회사 채팅</h1>
         <p class="sub">아이디·비밀번호로 로그인 (역할은 계정에 따름)</p>
         ${buildLanAccessBannerHtml()}
         ${buildPublicTunnelAdminHtml()}
-        ${socketPanel}
+        <div id="login-socket-panel-wrap">${buildLoginSocketPanelHtml()}</div>
         <div class="field">
           <label>아이디</label>
           <input type="text" id="login-id" placeholder="예: researcher1" autocomplete="username" />
@@ -1186,25 +1210,45 @@
         <div class="btn-row">
           <button type="button" class="btn btn-secondary" id="btn-notify">알림 허용 요청</button>
         </div>
-        <p class="hint">데모 계정: researcher1 / demo1234 · supervisor1 / demo1234 · interviewer1 / demo1234 등. <strong>등록·추가는 연구원·슈퍼바이저만</strong> 「계정」 탭에서 가능하며, 면접원 계정도 여기서 <strong>생성해 줄 수 있습니다</strong>. ${storageHint}</p>
+        <p class="hint">데모 계정: researcher1 / demo1234 · supervisor1 / demo1234 · interviewer1 / demo1234 등. <strong>등록·추가는 연구원·슈퍼바이저만</strong> 「계정」 탭에서 가능하며, 면접원 계정도 여기서 <strong>생성해 줄 수 있습니다</strong>. <span id="login-sync-hint">${loginSyncHintText()}</span></p>
         <p class="hint">공지를 <strong>카카오톡·문자처럼 상대 폰으로 자동</strong> 보내려면 알림톡/SMS 같은 유료 API와 서버가 필요합니다. 이 웹앱만으로는 상대 기기에 직접 가지 않으며, 공지 화면의 「공유하기」로 글을 복사하거나 휴대폰 공유 기능을 쓸 수 있습니다.</p>
       </div>
     `;
   }
 
-  function bindLogin() {
+  function shouldPatchLoginInsteadOfRender() {
+    return !state.me && view.screen === 'login' && document.getElementById('login-socket-panel-wrap');
+  }
+
+  function patchLoginSocketUiOnly() {
+    const wrap = document.getElementById('login-socket-panel-wrap');
+    if (!wrap) return;
+    const urlEl = document.getElementById('socket-url-input');
+    const savedUrl = urlEl ? urlEl.value : '';
+    wrap.innerHTML = buildLoginSocketPanelHtml();
+    const newUrl = document.getElementById('socket-url-input');
+    if (newUrl && savedUrl) newUrl.value = savedUrl;
+    const hint = document.getElementById('login-sync-hint');
+    if (hint) hint.textContent = loginSyncHintText();
+    bindSocketReconnectButton();
+  }
+
+  function bindSocketReconnectButton() {
     const btnSock = document.getElementById('btn-socket-reconnect');
-    if (btnSock) {
-      btnSock.addEventListener('click', async () => {
-        const raw = (document.getElementById('socket-url-input').value || '').trim();
-        if (raw) localStorage.setItem(LS_SOCKET_URL, normalizeSocketBaseUrl(raw));
-        else localStorage.removeItem(LS_SOCKET_URL);
-        realtimeConnectError = '';
-        await initRealtimeConnection();
-        await migrateAndSeed();
-        render();
-      });
-    }
+    if (!btnSock) return;
+    btnSock.addEventListener('click', async () => {
+      const raw = (document.getElementById('socket-url-input').value || '').trim();
+      if (raw) localStorage.setItem(LS_SOCKET_URL, normalizeSocketBaseUrl(raw));
+      else localStorage.removeItem(LS_SOCKET_URL);
+      realtimeConnectError = '';
+      await initRealtimeConnection();
+      await migrateAndSeed();
+      render();
+    });
+  }
+
+  function bindLogin() {
+    bindSocketReconnectButton();
     document.getElementById('btn-login').addEventListener('click', async () => {
       const loginId = (document.getElementById('login-id').value || '').trim();
       const password = document.getElementById('login-pw').value || '';
