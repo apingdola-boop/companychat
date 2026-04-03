@@ -1,0 +1,25 @@
+{
+  "name": "회사 채팅 (초안)",
+  "short_name": "회사채팅",
+  "description": "연구원·슈퍼바이저·면접원 — 개인/단체 채팅, 사진, 공지 알림",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#1a1d23",
+  "theme_color": "#3d5afe",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "../icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "../icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

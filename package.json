@@ -1,0 +1,17 @@
+{
+  "name": "company-chat",
+  "private": true,
+  "description": "회사 채팅 — 로컬: npm install && npm start / 고정 도메인: Render(render.yaml)·Fly(fly.toml) 배포 + PUBLIC_BASE_URL 로 커스텀 도메인",
+  "scripts": {
+    "start": "node server.js",
+    "serve": "node server.js",
+    "tunnel": "npx --yes localtunnel@2.0.2 --port 8787"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "socket.io": "^4.8.1"
+  }
+}

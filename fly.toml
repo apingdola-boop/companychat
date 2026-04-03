@@ -1,0 +1,17 @@
+# Fly.io: cd company-chat 후  fly launch
+# 앱 이름은 전역 유일(예: company-chat-내이니셜).  https://앱이름.fly.dev 가 고정 주소입니다.
+# 커스텀 도메인: fly certs add → 대시보드에서 PUBLIC_BASE_URL 로 https://도메인 지정 가능
+
+app = "company-chat-app"
+primary_region = "nrt"
+
+[build]
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+
+[[vm]]
+  memory = "256mb"
+  cpu_kind = "shared"
+  cpus = 1
