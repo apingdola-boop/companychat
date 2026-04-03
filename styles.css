@@ -39,8 +39,8 @@ body {
   -webkit-tap-highlight-color: transparent;
 }
 
-/* 모바일: 본문 스크롤로 입력창이 뷰포트 밖으로 밀리지 않게 — 내부 .messages 만 스크롤 */
-body.body--app-shell {
+/* 채팅 화면만 본문 스크롤 잠금 — 로그인/메인에 걸면 iOS·모바일에서 입력 포커스·키보드가 안 뜨는 경우가 있음 */
+body.body--app-shell.body--scroll-lock {
   overflow: hidden;
   overscroll-behavior: none;
 }
@@ -60,12 +60,16 @@ textarea {
   min-height: 100%;
   min-height: 100dvh;
   min-height: -webkit-fill-available;
-  height: 100%;
-  max-height: 100dvh;
-  max-height: -webkit-fill-available;
   display: flex;
   flex-direction: column;
   background: var(--bg);
+}
+
+/* 채팅 레이아웃 고정용(로그인·탭 목록에는 적용하지 않음 → 입력·스크롤 정상) */
+.app.app--chat-layout {
+  height: 100%;
+  max-height: 100dvh;
+  max-height: -webkit-fill-available;
   overflow: hidden;
 }
 
@@ -90,6 +94,16 @@ h1 {
 
 .login-panel {
   padding: 2rem 1.25rem calc(1.5rem + var(--safe-bottom));
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  flex: 1;
+  min-height: 0;
+}
+
+.login-panel .field input {
+  font-size: 16px;
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 .field {

@@ -1088,6 +1088,13 @@
     return room;
   }
 
+  function updateShellClasses() {
+    const chatLayout = !!(state.me && view.screen === 'chat');
+    document.body.classList.toggle('body--scroll-lock', chatLayout);
+    const appEl = document.getElementById('app');
+    if (appEl) appEl.classList.toggle('app--chat-layout', chatLayout);
+  }
+
   function render() {
     const root = el.root;
     if (!root) return;
@@ -1097,6 +1104,7 @@
     if (view.screen === 'login') {
       root.innerHTML = loginHTML();
       bindLogin();
+      updateShellClasses();
       return;
     }
 
@@ -1120,6 +1128,7 @@
     }
 
     if (view.modal) bindModal();
+    updateShellClasses();
   }
 
   function loginHTML() {
