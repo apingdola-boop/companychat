@@ -111,7 +111,7 @@
   function normalizeRoomModeration(room) {
     if (!room) return;
     if (room.type === 'group' && typeof room.interviewerChatAllowed !== 'boolean') {
-      room.interviewerChatAllowed = false;
+      room.interviewerChatAllowed = !room.isAnnounceFeed;
     }
     if (typeof room.roomNoticeTitle !== 'string') room.roomNoticeTitle = '';
     if (typeof room.roomNoticeBody !== 'string') room.roomNoticeBody = '';
@@ -2189,7 +2189,7 @@
         memberIds,
         updatedAt: Date.now(),
         lastPreview: '방이 개설되었습니다',
-        interviewerChatAllowed: false,
+        interviewerChatAllowed: true,
         roomNoticeTitle: '',
         roomNoticeBody: '',
       };

@@ -86,6 +86,21 @@ if (!Array.isArray(shared.accounts) || shared.accounts.length === 0) {
   saveSharedToDisk(shared);
 }
 
+/** 예전 기본값(false)으로 면접원 채팅만 막혀 있던 일반 단체방을 한 번 열어 준다(전체 공지방 제외). */
+function migrateInterviewerChatRoomDefault() {
+  if (shared.__ivChatGeneralDefaultFix) return;
+  if (Array.isArray(shared.rooms)) {
+    for (const r of shared.rooms) {
+      if (r.type === 'group' && !r.isAnnounceFeed && r.interviewerChatAllowed === false) {
+        r.interviewerChatAllowed = true;
+      }
+    }
+  }
+  shared.__ivChatGeneralDefaultFix = true;
+  saveSharedToDisk(shared);
+}
+migrateInterviewerChatRoomDefault();
+
 let saveTimer = null;
 function schedulePersist() {
   clearTimeout(saveTimer);
