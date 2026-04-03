@@ -1090,7 +1090,6 @@
 
   function updateShellClasses() {
     const chatLayout = !!(state.me && view.screen === 'chat');
-    document.body.classList.toggle('body--scroll-lock', chatLayout);
     const appEl = document.getElementById('app');
     if (appEl) appEl.classList.toggle('app--chat-layout', chatLayout);
   }
@@ -2944,16 +2943,21 @@
           </div>
           ${modRow}`;
 
+    /* 1:1도 단체방과 동일 flex 컬럼(chat-main-col) — 이전엔 .screen 직계만 있어 모바일에서 입력줄 레이어가 어긋나는 경우가 있었음 */
     if (room.type !== 'group') {
       return `
-      <div class="screen">
-        <header class="chat-header chat-header--stack">
-          ${chatHeaderInner}
-        </header>
-        ${roomNoticeBanner}
-        ${annStrip}
-        <div class="messages" id="msg-list">${bubbles}</div>
-        ${inputBar}
+      <div class="screen chat-screen-wrap">
+        <div id="chat-layout" class="chat-layout chat-layout--dm">
+          <div class="chat-main-col">
+            <header class="chat-header chat-header--stack">
+              ${chatHeaderInner}
+            </header>
+            ${roomNoticeBanner}
+            ${annStrip}
+            <div class="messages" id="msg-list">${bubbles}</div>
+            ${inputBar}
+          </div>
+        </div>
       </div>
     `;
     }

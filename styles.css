@@ -39,12 +39,6 @@ body {
   -webkit-tap-highlight-color: transparent;
 }
 
-/* 채팅 화면만 본문 스크롤 잠금 — 로그인/메인에 걸면 iOS·모바일에서 입력 포커스·키보드가 안 뜨는 경우가 있음 */
-body.body--app-shell.body--scroll-lock {
-  overflow: hidden;
-  overscroll-behavior: none;
-}
-
 button,
 input,
 select,
@@ -1220,10 +1214,11 @@ h1 {
   width: 100%;
   max-width: 480px;
   margin: 0 auto;
-  z-index: 45;
+  z-index: 120;
   background: var(--surface);
   border-top: 1px solid var(--border);
   box-shadow: 0 -8px 28px rgba(0, 0, 0, 0.28);
+  pointer-events: auto;
 }
 
 .chat-composer-fixed .input-bar {

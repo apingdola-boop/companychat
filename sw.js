@@ -1,5 +1,5 @@
 /* 회사 채팅 초안 — 오프라인 셸만 캐시 (실제 푸시는 서버 연동 필요) */
-const CACHE = 'company-chat-v5';
+const CACHE = 'company-chat-v6';
 
 self.addEventListener('install', (e) => {
   e.waitUntil(self.skipWaiting());
