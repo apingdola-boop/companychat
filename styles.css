@@ -1022,7 +1022,7 @@ h1 {
   flex-direction: column;
   min-height: 0;
   min-width: 0;
-  overflow: hidden;
+  overflow-x: hidden;
 }
 
 .chat-side-backdrop {
@@ -1304,6 +1304,24 @@ h1 {
 .input-bar textarea::placeholder {
   color: rgba(240, 242, 245, 0.42);
   -webkit-text-fill-color: rgba(240, 242, 245, 0.42);
+}
+
+/* 면접원 채팅 막힘 — iOS에서 disabled 대신 탭 가능한 안내 */
+.msg-input-placeholder {
+  flex: 1;
+  min-width: 0;
+  min-height: 44px;
+  margin: 0;
+  padding: 0.55rem 0.75rem;
+  text-align: left;
+  border-radius: 12px;
+  border: 1px dashed var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.35;
+  cursor: pointer;
+  -webkit-tap-highlight-color: rgba(61, 94, 254, 0.2);
 }
 
 .input-bar .attach {

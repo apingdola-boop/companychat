@@ -65,25 +65,27 @@ function seedDemoAccounts() {
   return accounts;
 }
 
-function loadShared() {
-  try {
-    const raw = fs.readFileSync(DATA_FILE, 'utf8');
-    const j = JSON.parse(raw);
-    return { ...emptyShared(), ...j };
-  } catch {
-    return emptyShared();
-  }
-}
-
 function saveSharedToDisk(obj) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   fs.writeFileSync(DATA_FILE, JSON.stringify(obj, null, 0), 'utf8');
 }
 
-let shared = loadShared();
-if (!Array.isArray(shared.accounts) || shared.accounts.length === 0) {
+let shared;
+const dataFileExists = fs.existsSync(DATA_FILE);
+if (!dataFileExists) {
   shared = { ...emptyShared(), accounts: seedDemoAccounts() };
   saveSharedToDisk(shared);
+} else {
+  try {
+    const raw = fs.readFileSync(DATA_FILE, 'utf8');
+    const j = JSON.parse(raw);
+    shared = { ...emptyShared(), ...j };
+    if (!Array.isArray(shared.accounts)) shared.accounts = [];
+  } catch (e) {
+    console.error('[companychat] shared-state.json 손상, 빈 DB로 복구합니다.', e.message);
+    shared = { ...emptyShared(), accounts: [] };
+    saveSharedToDisk(shared);
+  }
 }
 
 /** 예전 기본값(false)으로 면접원 채팅만 막혀 있던 일반 단체방을 한 번 열어 준다(전체 공지방 제외). */

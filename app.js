@@ -2892,6 +2892,10 @@
       ? `<div class="chat-lock-hint">단체방에서는 연구원·슈퍼바이저가「면접원 채팅 허용」을 켠 뒤에만 메시지를 보낼 수 있습니다.</div>`
       : '';
     const inputBarClass = ivBlocked ? 'input-bar input-bar--locked' : 'input-bar';
+    /* iOS: disabled textarea는 포커스·키보드가 안 뜨는 경우가 많아, 막힌 경우에는 안내 버튼만 둠 */
+    const msgField = ivBlocked
+      ? `<button type="button" class="msg-input-placeholder" id="msg-input-blocked-hint" aria-label="면접원 채팅 안내">면접원 채팅이 아직 허용되지 않았습니다. 탭하여 안내를 확인하세요.</button>`
+      : `<textarea id="msg-input" rows="1" placeholder="메시지 입력…" autocomplete="off" autocorrect="on" autocapitalize="sentences" inputmode="text" enterkeyhint="send"></textarea>`;
     const inputBar = `
         ${lockHint}
         <div class="${inputBarClass}">
@@ -2899,7 +2903,7 @@
             <span>🖼</span>
             <input type="file" id="file-img" accept="image/*"${ivBlocked ? ' disabled' : ''} />
           </label>
-          <textarea id="msg-input" rows="1" placeholder="메시지 입력…" autocomplete="off" autocorrect="on" autocapitalize="sentences" inputmode="text" enterkeyhint="send"${ivBlocked ? ' disabled' : ''}></textarea>
+          ${msgField}
           <button type="button" class="send" id="btn-send"${ivBlocked ? ' disabled' : ''}>전송</button>
         </div>`;
 
@@ -3068,6 +3072,10 @@
       render();
     });
 
+    document.getElementById('msg-input-blocked-hint')?.addEventListener('click', () => {
+      showToast('단체방에서 면접원 채팅이 아직 허용되지 않았습니다. 연구원·슈퍼바이저에게「면접원 채팅 허용」을 요청하세요.');
+    });
+
     let pendingImage = null;
     const fileInput = document.getElementById('file-img');
     fileInput.addEventListener('change', () => {
@@ -3115,35 +3123,48 @@
     }
 
     const msgInput = document.getElementById('msg-input');
-    document.getElementById('btn-send').addEventListener('click', send);
-    msgInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        send();
-      }
-    });
-    function scrollInputIntoViewForKeyboard() {
-      requestAnimationFrame(() => {
-        try {
-          msgInput.scrollIntoView({ block: 'end', inline: 'nearest', behavior: 'smooth' });
-        } catch (_) {}
-        try {
-          const vv = window.visualViewport;
-          if (!vv) return;
-          const bar = msgInput.closest('.input-bar');
-          if (!bar) return;
-          const rect = bar.getBoundingClientRect();
-          const obscured = rect.bottom > vv.height - 8;
-          if (obscured) {
-            window.scrollBy(0, rect.bottom - vv.height + 16);
-          }
-        } catch (_) {}
+    if (msgInput) {
+      document.getElementById('btn-send')?.addEventListener('click', send);
+      msgInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          send();
+        }
       });
-    }
-    msgInput.addEventListener('focus', scrollInputIntoViewForKeyboard);
-    if (window.visualViewport) {
-      window.visualViewport.addEventListener('resize', () => {
-        if (document.activeElement === msgInput) scrollInputIntoViewForKeyboard();
+      function scrollInputIntoViewForKeyboard() {
+        requestAnimationFrame(() => {
+          try {
+            msgInput.scrollIntoView({ block: 'end', inline: 'nearest', behavior: 'smooth' });
+          } catch (_) {}
+          try {
+            const vv = window.visualViewport;
+            if (!vv) return;
+            const bar = msgInput.closest('.input-bar');
+            if (!bar) return;
+            const rect = bar.getBoundingClientRect();
+            const obscured = rect.bottom > vv.height - 8;
+            if (obscured) {
+              window.scrollBy(0, rect.bottom - vv.height + 16);
+            }
+          } catch (_) {}
+        });
+      }
+      msgInput.addEventListener('focus', scrollInputIntoViewForKeyboard);
+      if (window.visualViewport) {
+        window.visualViewport.addEventListener('resize', () => {
+          if (document.activeElement === msgInput) scrollInputIntoViewForKeyboard();
+        });
+      }
+      msgInput.addEventListener('touchstart', () => {
+        try {
+          msgInput.focus();
+        } catch (_) {}
+      }, { passive: true });
+      document.querySelector('.input-bar')?.addEventListener('click', (ev) => {
+        if (ev.target.closest('textarea#msg-input, .send, .attach, label.attach')) return;
+        try {
+          msgInput.focus();
+        } catch (_) {}
       });
     }
   }

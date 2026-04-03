@@ -1,15 +1,8 @@
 /* 회사 채팅 초안 — 오프라인 셸만 캐시 (실제 푸시는 서버 연동 필요) */
-const CACHE = 'company-chat-v1';
-const ASSETS = ['./index.html', './styles.css', './app.js', './manifest.json'];
+const CACHE = 'company-chat-v3';
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(
-    caches
-      .open(CACHE)
-      .then((c) => c.addAll(ASSETS))
-      .then(() => self.skipWaiting())
-      .catch(() => self.skipWaiting())
-  );
+  e.waitUntil(self.skipWaiting());
 });
 
 self.addEventListener('activate', (e) => {
@@ -20,11 +13,29 @@ self.addEventListener('activate', (e) => {
   );
 });
 
+function isAppAsset(url) {
+  const p = url.split('?')[0];
+  return /\/(app\.js|styles\.css|index\.html|manifest\.json)$/i.test(p);
+}
+
 self.addEventListener('fetch', (e) => {
   const req = e.request;
+  const url = req.url;
   if (req.mode === 'navigate') {
     e.respondWith(
       fetch(req).catch(() => caches.match('./index.html'))
+    );
+    return;
+  }
+  if (req.method === 'GET' && isAppAsset(url)) {
+    e.respondWith(
+      fetch(req)
+        .then((res) => {
+          const copy = res.clone();
+          caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
+          return res;
+        })
+        .catch(() => caches.match(req))
     );
     return;
   }
