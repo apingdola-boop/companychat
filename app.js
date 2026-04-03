@@ -2897,6 +2897,7 @@
       ? `<button type="button" class="msg-input-placeholder" id="msg-input-blocked-hint" aria-label="면접원 채팅 안내">면접원 채팅이 아직 허용되지 않았습니다. 탭하여 안내를 확인하세요.</button>`
       : `<textarea id="msg-input" rows="1" placeholder="메시지 입력…" autocomplete="off" autocorrect="on" autocapitalize="sentences" inputmode="text" enterkeyhint="send"></textarea>`;
     const inputBar = `
+        <div class="chat-composer-fixed" role="region" aria-label="메시지 입력">
         ${lockHint}
         <div class="${inputBarClass}">
           <label class="attach" title="사진">
@@ -2905,6 +2906,7 @@
           </label>
           ${msgField}
           <button type="button" class="send" id="btn-send"${ivBlocked ? ' disabled' : ''}>전송</button>
+        </div>
         </div>`;
 
     const chatHeaderInner =
@@ -2986,7 +2988,7 @@
     const list = document.getElementById('msg-list');
     if (list) list.scrollTop = list.scrollHeight;
 
-    document.getElementById('chat-back').addEventListener('click', () => {
+    document.getElementById('chat-back')?.addEventListener('click', () => {
       document.getElementById('video-call-overlay')?.remove();
       view.chatSideOpen = false;
       view.screen = 'main';
@@ -3078,19 +3080,21 @@
 
     let pendingImage = null;
     const fileInput = document.getElementById('file-img');
-    fileInput.addEventListener('change', () => {
-      const r0 = state.rooms.find((x) => x.id === view.roomId);
-      if (r0 && interviewerChatSendBlocked(r0)) return;
-      const f = fileInput.files && fileInput.files[0];
-      if (!f || !f.type.startsWith('image/')) return;
-      const reader = new FileReader();
-      reader.onload = () => {
-        pendingImage = reader.result;
-        showToast('사진이 첨부되었습니다. 전송을 누르세요.');
-      };
-      reader.readAsDataURL(f);
-      fileInput.value = '';
-    });
+    if (fileInput) {
+      fileInput.addEventListener('change', () => {
+        const r0 = state.rooms.find((x) => x.id === view.roomId);
+        if (r0 && interviewerChatSendBlocked(r0)) return;
+        const f = fileInput.files && fileInput.files[0];
+        if (!f || !f.type.startsWith('image/')) return;
+        const reader = new FileReader();
+        reader.onload = () => {
+          pendingImage = reader.result;
+          showToast('사진이 첨부되었습니다. 전송을 누르세요.');
+        };
+        reader.readAsDataURL(f);
+        fileInput.value = '';
+      });
+    }
 
     function send() {
       const ta = document.getElementById('msg-input');

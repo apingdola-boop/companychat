@@ -1057,10 +1057,12 @@ h1 {
   transform: translateX(100%);
   transition: transform 0.22s ease;
   box-shadow: -6px 0 28px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
 }
 
 .chat-layout--panel-open .chat-side-panel {
   transform: translateX(0);
+  pointer-events: auto;
 }
 
 .chat-side-head {
@@ -1191,6 +1193,30 @@ h1 {
   flex-direction: column;
   gap: 0.65rem;
   min-height: 0;
+  /* chat-composer-fixed 높이만큼 하단 여백 */
+  padding-bottom: calc(1rem + 7rem + var(--safe-bottom));
+}
+
+/* 채팅 하단: 모바일에서 flex로 밀려 안 보이던 입력창을 뷰포트에 고정 */
+.chat-composer-fixed {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: 100%;
+  max-width: 480px;
+  margin: 0 auto;
+  z-index: 45;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  box-shadow: 0 -8px 28px rgba(0, 0, 0, 0.28);
+}
+
+.chat-composer-fixed .input-bar {
+  position: relative;
+  bottom: auto;
+  z-index: 1;
+  box-shadow: none;
 }
 
 .bubble-row {
