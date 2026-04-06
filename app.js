@@ -583,6 +583,10 @@
     modal: null,
     chatSideOpen: false,
     _lastOpenRoomId: null,
+    /** 개발자 모드: 작업 표에 올린 면접원 id (검색·추가 순서 유지) */
+    devBulkSelectedIds: [],
+    /** 개발자 모드: 검색창 입력 유지용 */
+    devBulkSearchDraft: '',
   };
 
   /** 개발자 모드: 면접원 계정 id → 첨부 예정 사진(data URL). 탭을 벗어나면 비움. */
@@ -1758,10 +1762,10 @@
         <nav class="${tabsClass}">
           <button type="button" class="tab ${view.tab === 'chats' ? 'active' : ''}" data-tab="chats">채팅</button>
           ${tabContactsBtn}
-          ${tabAccountsBtn}
           ${tabFeedbackBtn}
           ${tabDevBulkBtn}
           ${tabTrafficBtn}
+          ${tabAccountsBtn}
         </nav>
         ${chatNotifyPrefBar}
         <div class="list-scroll">${listBody}</div>
@@ -1931,67 +1935,94 @@
     if (!state.me || !isStaffAccountRole(state.me.role)) {
       return '<p class="hint">이 탭은 연구원·슈퍼바이저만 사용할 수 있습니다.</p>';
     }
-    const users = state.accounts.filter((u) => u.role === 'interviewer');
-    if (!users.length) {
+    if (!Array.isArray(view.devBulkSelectedIds)) view.devBulkSelectedIds = [];
+    const allIv = state.accounts.filter((u) => u.role === 'interviewer');
+    if (!allIv.length) {
       return `<div class="devbulk-tab feedback-tab">
         <h2 class="feedback-heading">개발자 모드</h2>
         <p class="hint" style="padding:1rem 0">등록된 면접원이 없습니다. 계정 탭에서 먼저 등록해 주세요.</p>
       </div>`;
     }
-    const sortByName = (a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'ko');
-    const byTeam = {};
-    const unassigned = [];
-    for (const u of users) {
-      const tk = u.team && TEAMS[u.team] ? u.team : null;
-      if (!tk) unassigned.push(u);
-      else {
-        if (!byTeam[tk]) byTeam[tk] = [];
-        byTeam[tk].push(u);
-      }
-    }
+    const userByIdLocal = (id) => state.accounts.find((a) => a.id === id && a.role === 'interviewer');
     const rowHtml = (u) => {
       const teamCap = u.team && TEAMS[u.team] ? TEAMS[u.team] : '팀 미지정';
-      return `<div class="devbulk-row" data-devbulk-user="${escapeHtml(u.id)}">
-        <div class="devbulk-row-head">
-          <span class="devbulk-name">${escapeHtml(u.name)}</span>
-          <span class="caption">${escapeHtml(teamCap)}</span>
-        </div>
-        <div class="field devbulk-field">
-          <textarea class="devbulk-textarea" rows="2" data-devbulk-ta="${escapeHtml(u.id)}" placeholder="메시지 (사진만 보낼 때는 비워도 됨)"></textarea>
-        </div>
-        <div class="devbulk-preview-slot" data-devbulk-preview-slot="${escapeHtml(u.id)}"></div>
-        <div class="devbulk-attach-row">
-          <label class="devbulk-img-pick">
-            <span>📷 사진 첨부</span>
+      const pend = devBulkPendingImageByIvId[u.id];
+      const previewInner = pend
+        ? `<div class="devbulk-preview">
+            <img src="${escapeDataUrlForAttr(pend)}" alt="" />
+            <button type="button" class="btn btn-ghost devbulk-img-clear" data-devbulk-clear="${escapeHtml(u.id)}">사진 지우기</button>
+          </div>`
+        : '';
+      return `<tr class="devbulk-row" data-devbulk-user="${escapeHtml(u.id)}">
+        <td class="devbulk-cell-name">
+          <button type="button" class="btn btn-ghost devbulk-row-remove" data-devbulk-remove="${escapeHtml(
+            u.id
+          )}" title="작업 목록에서 빼기">목록 제거</button>
+          <div class="devbulk-name">${escapeHtml(u.name)}</div>
+          <div class="devbulk-cell-team caption">${escapeHtml(teamCap)}</div>
+        </td>
+        <td class="devbulk-cell-msg">
+          <textarea class="devbulk-textarea" rows="2" data-devbulk-ta="${escapeHtml(
+            u.id
+          )}" placeholder="이 면접원에게 보낼 문구"></textarea>
+        </td>
+        <td class="devbulk-cell-photo">
+          <div class="devbulk-preview-slot" data-devbulk-preview-slot="${escapeHtml(u.id)}">${previewInner}</div>
+          <label class="devbulk-img-pick devbulk-img-pick--cell">
+            <span>📷 첨부</span>
             <input type="file" accept="image/*" class="devbulk-file" data-devbulk-file="${escapeHtml(u.id)}" />
           </label>
           <span class="caption devbulk-img-hint" data-devbulk-img-hint="${escapeHtml(u.id)}"></span>
-        </div>
-      </div>`;
+        </td>
+      </tr>`;
     };
-    let inner = '';
-    for (const tid of TEAM_ORDER) {
-      const list = byTeam[tid];
-      if (!list || !list.length) continue;
-      inner += `<div class="devbulk-team-title">${escapeHtml(TEAMS[tid])}</div>`;
-      inner += [...list].sort(sortByName).map(rowHtml).join('');
+    let tbodyInner = '';
+    const picked = view.devBulkSelectedIds.map((id) => userByIdLocal(id)).filter(Boolean);
+    if (!picked.length) {
+      tbodyInner = `<tr><td colspan="3" class="devbulk-empty-hint"><p class="hint" style="margin:0">위에서 이름·아이디로 검색해 면접원을 추가하세요. 추가한 사람만 이 표에 모입니다.</p></td></tr>`;
+    } else {
+      tbodyInner = picked.map(rowHtml).join('');
     }
-    if (unassigned.length) {
-      inner += `<div class="devbulk-team-title">팀 미지정</div>`;
-      inner += [...unassigned].sort(sortByName).map(rowHtml).join('');
-    }
+    const nSel = picked.length;
+    const tableHtml = `
+        <div class="devbulk-work-head">
+          <h3 class="devbulk-work-title">작업 표 <span class="caption">(선택 ${nSel}명)</span></h3>
+        </div>
+        <div class="devbulk-table-scroll">
+          <table class="devbulk-grid">
+            <thead>
+              <tr>
+                <th scope="col" class="devbulk-col-name">면접원명</th>
+                <th scope="col" class="devbulk-col-msg">문구</th>
+                <th scope="col" class="devbulk-col-photo">사진</th>
+              </tr>
+            </thead>
+            <tbody>${tbodyInner}</tbody>
+          </table>
+        </div>`;
     return `
       <div class="devbulk-tab feedback-tab">
         <h2 class="feedback-heading">개발자 모드</h2>
-        <p class="caption">면접원마다 메시지·사진을 다르게 넣고「한꺼번에 전송」하면 각자 1:1 채팅으로 동시에 갑니다. <strong>메시지와 사진이 모두 비어 있으면</strong> 그 면접원에게는 보내지 않습니다. 사진만 보낼 수도 있습니다.</p>
+        <p class="caption"><strong>검색해서 면접원을 골라 추가</strong>하면 아래 작업 표에만 모입니다. 표에서 행마다 문구·사진을 다르게 넣고「한꺼번에 전송」하면 각자 1:1 채팅으로 갑니다.</p>
+        <section class="devbulk-pick-panel" aria-label="면접원 검색 및 추가">
+          <div class="field devbulk-search-field">
+            <label for="devbulk-search">면접원 검색 <span class="caption">(이름·@아이디·팀명)</span></label>
+            <input type="search" id="devbulk-search" autocomplete="off" placeholder="예: 최면접, @id, 부산팀" value="${escapeHtml(view.devBulkSearchDraft || '')}" />
+          </div>
+          <div id="devbulk-search-results" class="devbulk-search-results" role="listbox" aria-label="검색 결과"></div>
+          <div class="devbulk-pick-actions">
+            <button type="button" class="btn btn-secondary" id="devbulk-add-all-iv">등록 면접원 전체 추가</button>
+            <button type="button" class="btn btn-ghost" id="devbulk-clear-picked">작업 목록 비우기</button>
+          </div>
+        </section>
         <div class="devbulk-toolbar">
           <div class="field" style="margin-bottom:0.75rem">
-            <label for="devbulk-common">공통 문구 <span class="caption">(선택 · 아래에서 사람마다 수정 가능)</span></label>
-            <textarea id="devbulk-common" rows="2" placeholder="예: 4월 9일까지 제출 부탁드립니다. (모든 면접원 칸에 한번에 넣으려면 아래 버튼 사용)"></textarea>
+            <label for="devbulk-common">공통 문구 <span class="caption">(선택 · 아래 표의 문구 칸에 한꺼번에 넣기)</span></label>
+            <textarea id="devbulk-common" rows="2" placeholder="예: 4월 9일까지 제출 부탁드립니다. (모든 행에 넣으려면 아래 버튼 사용)"></textarea>
           </div>
-          <button type="button" class="btn btn-secondary" id="devbulk-fill-all">모든 면접원 칸에 넣기</button>
+          <button type="button" class="btn btn-secondary" id="devbulk-fill-all">작업 표 전체 행에 문구 넣기</button>
         </div>
-        <div class="devbulk-list">${inner}</div>
+        <div class="devbulk-list devbulk-list--table">${tableHtml}</div>
         <button type="button" class="btn btn-primary devbulk-send-btn" id="devbulk-send">한꺼번에 전송</button>
         <section class="devbulk-future" aria-label="추가 도구 예정 영역">
           <h3 class="devbulk-future-heading">추가 기능 (예정)</h3>
@@ -1999,6 +2030,41 @@
           <div class="devbulk-future-placeholder"></div>
         </section>
       </div>`;
+  }
+
+  function devBulkRefreshSearchResults() {
+    if (!Array.isArray(view.devBulkSelectedIds)) view.devBulkSelectedIds = [];
+    const box = document.getElementById('devbulk-search-results');
+    const input = document.getElementById('devbulk-search');
+    if (!box) return;
+    const q = ((input && input.value) || view.devBulkSearchDraft || '').trim();
+    if (!q) {
+      box.innerHTML = '';
+      return;
+    }
+    const sel = new Set(view.devBulkSelectedIds);
+    let ivs = state.accounts.filter((u) => u.role === 'interviewer' && accountMatchesSearch(u, q) && !sel.has(u.id));
+    const MAX = 25;
+    if (!ivs.length) {
+      box.innerHTML =
+        '<p class="hint devbulk-search-empty" style="margin:0.35rem 0">일치하는 면접원이 없거나 이미 작업 목록에 있습니다.</p>';
+      return;
+    }
+    const more = ivs.length > MAX;
+    ivs = ivs.slice(0, MAX);
+    const btns = ivs
+      .map(
+        (u) =>
+          `<button type="button" class="devbulk-search-pick" role="option" data-devbulk-pick="${escapeHtml(u.id)}"><strong>${escapeHtml(
+            u.name
+          )}</strong><span class="caption"> · ${escapeHtml(teamLabel(u.team) || '팀 미지정')} · @${escapeHtml(u.loginId)}</span></button>`
+      )
+      .join('');
+    box.innerHTML =
+      btns +
+      (more
+        ? `<p class="hint" style="margin:0.4rem 0 0">더 많습니다. 검색을 좁히면 됩니다. (최대 ${MAX}명 표시)</p>`
+        : '');
   }
 
   function accountsAdminHTML() {
@@ -2079,6 +2145,8 @@
         const next = t.dataset.tab;
         if (view.tab === 'devbulk' && next !== 'devbulk') {
           for (const k of Object.keys(devBulkPendingImageByIvId)) delete devBulkPendingImageByIvId[k];
+          view.devBulkSelectedIds = [];
+          view.devBulkSearchDraft = '';
         }
         view.tab = next;
         render();
@@ -2175,16 +2243,68 @@
     }
 
     if (view.tab === 'devbulk' && canManageAccounts()) {
+      if (!Array.isArray(view.devBulkSelectedIds)) view.devBulkSelectedIds = [];
+
+      const searchInp = document.getElementById('devbulk-search');
+      if (searchInp) {
+        searchInp.addEventListener('input', () => {
+          view.devBulkSearchDraft = searchInp.value;
+          devBulkRefreshSearchResults();
+        });
+        searchInp.addEventListener('focus', () => devBulkRefreshSearchResults());
+      }
+
+      document.getElementById('devbulk-search-results')?.addEventListener('click', (ev) => {
+        const pick = ev.target.closest('.devbulk-search-pick');
+        if (!pick) return;
+        const id = pick.getAttribute('data-devbulk-pick');
+        if (!id) return;
+        if (!state.accounts.some((a) => a.id === id && a.role === 'interviewer')) return;
+        if (!view.devBulkSelectedIds.includes(id)) view.devBulkSelectedIds.push(id);
+        showToast('작업 목록에 추가했습니다.');
+        render();
+        requestAnimationFrame(() => {
+          devBulkRefreshSearchResults();
+        });
+      });
+
+      document.getElementById('devbulk-add-all-iv')?.addEventListener('click', () => {
+        const sortByName = (a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'ko');
+        const all = state.accounts.filter((u) => u.role === 'interviewer').sort(sortByName);
+        const set = new Set(view.devBulkSelectedIds);
+        for (const u of all) set.add(u.id);
+        view.devBulkSelectedIds = Array.from(set);
+        showToast(`${view.devBulkSelectedIds.length}명을 작업 목록에 두었습니다.`);
+        render();
+        requestAnimationFrame(() => devBulkRefreshSearchResults());
+      });
+
+      document.getElementById('devbulk-clear-picked')?.addEventListener('click', () => {
+        if (!view.devBulkSelectedIds.length) {
+          showToast('비울 면접원이 없습니다.');
+          return;
+        }
+        if (!confirm('작업 목록과 붙여 둔 사진 초안을 모두 비울까요?')) return;
+        for (const k of Object.keys(devBulkPendingImageByIvId)) delete devBulkPendingImageByIvId[k];
+        view.devBulkSelectedIds = [];
+        render();
+      });
+
       document.getElementById('devbulk-fill-all')?.addEventListener('click', () => {
         const com = (document.getElementById('devbulk-common')?.value || '').trim();
         if (!com) {
           showToast('공통 문구 칸에 먼저 내용을 입력해 주세요.');
           return;
         }
-        document.querySelectorAll('.devbulk-textarea').forEach((ta) => {
+        const tas = document.querySelectorAll('.devbulk-textarea');
+        if (!tas.length) {
+          showToast('먼저 작업 목록에 면접원을 추가해 주세요.');
+          return;
+        }
+        tas.forEach((ta) => {
           ta.value = com;
         });
-        showToast('모든 면접원 입력란에 넣었습니다. 필요하면 각 사람 줄만 고쳐 주세요.');
+        showToast('작업 표의 모든 문구 칸에 넣었습니다.');
       });
 
       document.querySelectorAll('.devbulk-file').forEach((inp) => {
@@ -2247,6 +2367,17 @@
 
       document.querySelectorAll('.devbulk-list').forEach((listEl) => {
         listEl.addEventListener('click', (ev) => {
+          const rm = ev.target.closest('.devbulk-row-remove');
+          if (rm) {
+            ev.preventDefault();
+            const rid = rm.getAttribute('data-devbulk-remove');
+            if (!rid) return;
+            view.devBulkSelectedIds = view.devBulkSelectedIds.filter((x) => x !== rid);
+            delete devBulkPendingImageByIvId[rid];
+            render();
+            requestAnimationFrame(() => devBulkRefreshSearchResults());
+            return;
+          }
           const btn = ev.target.closest('.devbulk-img-clear');
           if (!btn) return;
           ev.preventDefault();
@@ -2260,6 +2391,8 @@
           if (hint) hint.textContent = '';
         });
       });
+
+      requestAnimationFrame(() => devBulkRefreshSearchResults());
 
       document.getElementById('devbulk-send')?.addEventListener('click', () => {
         if (!state.me || !isStaffAccountRole(state.me.role)) return;
@@ -2294,11 +2427,13 @@
           ta.value = '';
         }
         if (!sent) {
-          showToast('보낼 내용이 없습니다. 메시지 또는 사진을 최소 한 면접원 칸에 넣어 주세요.');
+          showToast('보낼 내용이 없습니다. 작업 목록에 면접원을 넣고 문구 또는 사진을 입력해 주세요.');
           return;
         }
         saveState();
         showToast(`${sent}명의 면접원에게 1:1로 보냈습니다.`);
+        view.devBulkSelectedIds = [];
+        view.devBulkSearchDraft = '';
         render();
       });
     }
