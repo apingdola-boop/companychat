@@ -306,8 +306,10 @@ function isLocalAdminRequest(req) {
 
 const app = express();
 const server = http.createServer(app);
+/** 기본 1MB면 모바일 고화질 사진·짧은 동영상(base64) 동기화가 잘리므로 여유 있게 허용 */
 const io = new Server(server, {
   cors: { origin: true, credentials: true },
+  maxHttpBufferSize: 50 * 1024 * 1024,
 });
 
 app.get('/api/health', (_req, res) => {

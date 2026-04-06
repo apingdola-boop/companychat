@@ -3,12 +3,168 @@
 
   const STORAGE_V2 = 'company-chat-draft-v2';
   const STORAGE_V1 = 'company-chat-draft-v1';
+  const LS_THEME = 'company-chat-theme';
+
+  /** Socket 페이로드·메모리 보호 — 서버 maxHttpBufferSize(50MB)와 base64 팽창을 감안 */
+  const MAX_CHAT_MEDIA_BYTES = 36 * 1024 * 1024;
+  /** 압축 전 원본 허용(카메라 고해상도) — 동영상은 아래 한도만 적용 */
+  const MAX_CHAT_IMAGE_SOURCE_BYTES = 80 * 1024 * 1024;
+
+  function dataUrlByteSize(dataUrl) {
+    const s = String(dataUrl || '');
+    const i = s.indexOf('base64,');
+    if (i < 0) return s.length;
+    const b64 = s.slice(i + 7);
+    return Math.floor((b64.length * 3) / 4);
+  }
+
+  /**
+   * 고화질 사진은 Base64만으로도 한도 초과하기 쉬움 — 긴 변 기준 리사이즈 + JPEG 로 채팅에 맞게 축소.
+   * GIF·로드 실패 시 null → 호출부에서 원본(FileReader) 폴백.
+   */
+  function compressImageFileToDataUrl(file) {
+    return new Promise((resolve) => {
+      if (!file || !fileLooksImage(file)) {
+        resolve(null);
+        return;
+      }
+      const t = (file.type || '').toLowerCase();
+      if (t === 'image/gif') {
+        resolve(null);
+        return;
+      }
+      const blobUrl = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        URL.revokeObjectURL(blobUrl);
+        try {
+          const iw = img.naturalWidth || img.width;
+          const ih = img.naturalHeight || img.height;
+          if (!iw || !ih) {
+            resolve(null);
+            return;
+          }
+          const passes = [
+            { edge: 2560, q: 0.88 },
+            { edge: 1920, q: 0.82 },
+            { edge: 1600, q: 0.76 },
+            { edge: 1280, q: 0.72 },
+            { edge: 1024, q: 0.68 },
+          ];
+          let last = null;
+          for (const { edge, q } of passes) {
+            let w = iw;
+            let h = ih;
+            if (w > edge || h > edge) {
+              if (w >= h) {
+                h = Math.max(1, Math.round((h * edge) / w));
+                w = edge;
+              } else {
+                w = Math.max(1, Math.round((w * edge) / h));
+                h = edge;
+              }
+            }
+            const canvas = document.createElement('canvas');
+            canvas.width = w;
+            canvas.height = h;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) {
+              resolve(null);
+              return;
+            }
+            ctx.drawImage(img, 0, 0, w, h);
+            last = canvas.toDataURL('image/jpeg', q);
+            if (dataUrlByteSize(last) <= MAX_CHAT_MEDIA_BYTES) {
+              resolve(last);
+              return;
+            }
+          }
+          resolve(last && dataUrlByteSize(last) <= MAX_CHAT_MEDIA_BYTES ? last : null);
+        } catch (_) {
+          resolve(null);
+        }
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(blobUrl);
+        resolve(null);
+      };
+      img.src = blobUrl;
+    });
+  }
+
+  function fileLooksImage(f) {
+    if (!f) return false;
+    const t = (f.type || '').toLowerCase();
+    if (t.startsWith('image/')) return true;
+    return /\.(jpe?g|png|gif|webp|heic|heif|bmp)$/i.test(f.name || '');
+  }
+
+  function fileLooksVideo(f) {
+    if (!f) return false;
+    const t = (f.type || '').toLowerCase();
+    if (t.startsWith('video/')) return true;
+    return /\.(mp4|webm|mov|m4v|mkv|3gp|ogg)$/i.test(f.name || '');
+  }
+
+  function escapeDataUrlForAttr(url) {
+    return String(url)
+      .replace(/&/g, '&amp;')
+      .replace(/"/g, '&quot;')
+      .replace(/</g, '&lt;');
+  }
+
+  function getTheme() {
+    try {
+      return localStorage.getItem(LS_THEME) === 'light' ? 'light' : 'dark';
+    } catch (_) {
+      return 'dark';
+    }
+  }
+
+  /** DOM·localStorage·theme-color 메타를 한데 맞춤 (첫 페인트는 index.html 인라인 스크립트가 담당) */
+  function applyTheme(mode) {
+    const t = mode === 'light' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', t);
+    try {
+      localStorage.setItem(LS_THEME, t);
+    } catch (_) {}
+    const meta = document.getElementById('meta-theme-color');
+    if (meta) {
+      meta.setAttribute('content', t === 'light' ? '#3d5afe' : '#1a1d23');
+    }
+  }
+
+  function themeToggleButtonHtml(extraClass) {
+    const extra = extraClass ? ' ' + extraClass : '';
+    const dark = getTheme() === 'dark';
+    const label = dark ? '☀ 밝게' : '🌙 어둡게';
+    const title = dark ? '어두운 화면입니다. 탭하면 밝은 모드로 바꿉니다.' : '밝은 화면입니다. 탭하면 어두운 모드로 바꿉니다.';
+    return `<button type="button" class="btn btn-ghost btn-theme${extra}" id="btn-theme" title="${title}">${label}</button>`;
+  }
+
+  function bindThemeToggle() {
+    const btn = document.getElementById('btn-theme');
+    if (!btn) return;
+    const sync = () => {
+      const dark = getTheme() === 'dark';
+      btn.textContent = dark ? '☀ 밝게' : '🌙 어둡게';
+      btn.title = dark ? '어두운 화면입니다. 탭하면 밝은 모드로 바꿉니다.' : '밝은 화면입니다. 탭하면 어두운 모드로 바꿉니다.';
+    };
+    sync();
+    btn.addEventListener('click', () => {
+      applyTheme(getTheme() === 'dark' ? 'light' : 'dark');
+      sync();
+    });
+  }
 
   const ROLES = {
     researcher: { label: '연구원', className: 'researcher' },
     supervisor: { label: '슈퍼바이저', className: 'supervisor' },
     interviewer: { label: '면접원', className: 'interviewer' },
   };
+
+  /** 슈퍼바이저·면접원 — 교통비·거리 계산 외부 도구 (ROUTE CALC, GitHub Pages) */
+  const TRAFFIC_TOOL_URL = 'https://apingdola-boop.github.io/trafficservice.github.io/';
 
   const TEAM_ORDER = ['seoul', 'busan', 'daegu', 'daejeon', 'gwangju'];
   const TEAMS = {
@@ -26,6 +182,10 @@
     away: { label: '자리비움' },
     vacation: { label: '휴가' },
   };
+
+  /** 면접원이 메시지를 보낼 때, 방 안 직원이 자리비움·휴가이면 이후 자동 안내 말풍선 */
+  const AUTO_ABSENCE_REPLY_TEXT =
+    '휴가 또는 자리비움 상태이니, 돌아오는 대로 최대한 빠르게 회신드리겠습니다.';
 
   function normalizeInterviewerTeam(value) {
     const raw = String(value ?? '').trim();
@@ -424,6 +584,9 @@
     chatSideOpen: false,
     _lastOpenRoomId: null,
   };
+
+  /** 개발자 모드: 면접원 계정 id → 첨부 예정 사진(data URL). 탭을 벗어나면 비움. */
+  const devBulkPendingImageByIvId = Object.create(null);
 
   const el = {
     root: null,
@@ -836,6 +999,18 @@
     return normalizeStaffPresenceKey(raw);
   }
 
+  /** 이 방에 참여한 연구원·슈퍼바이저 중 자리비움 또는 휴가인 사람이 있는지 */
+  function roomHasStaffAwayOrVacation(room) {
+    if (!room || !Array.isArray(room.memberIds)) return false;
+    for (const mid of room.memberIds) {
+      const u = userById(mid);
+      if (!u || !isStaffAccountRole(u.role)) continue;
+      const p = staffPresenceForUser(u.id);
+      if (p === 'away' || p === 'vacation') return true;
+    }
+    return false;
+  }
+
   function cycleStaffPresence() {
     if (!state.me || !isStaffAccountRole(state.me.role)) return;
     if (!state.staffPresenceByUser || typeof state.staffPresenceByUser !== 'object') state.staffPresenceByUser = {};
@@ -1043,9 +1218,8 @@
 
   function showToast(msg) {
     const t = document.createElement('div');
+    t.className = 'app-toast';
     t.textContent = msg;
-    t.style.cssText =
-      'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:#333;color:#fff;padding:10px 14px;border-radius:10px;font-size:12px;z-index:200;max-width:90%;text-align:center';
     document.body.appendChild(t);
     setTimeout(() => t.remove(), 3200);
   }
@@ -1126,6 +1300,7 @@
       senderId: state.me.id,
       text: '【공지】' + title + '\n' + body,
       image: null,
+      video: null,
       ts: Date.now(),
       isAnnouncement: true,
     };
@@ -1180,6 +1355,14 @@
     }
 
     if (state.me && !canManageAccounts() && view.tab === 'accounts') view.tab = 'chats';
+    if (state.me && !canManageAccounts() && view.tab === 'devbulk') view.tab = 'chats';
+    if (
+      state.me &&
+      view.tab === 'traffic' &&
+      state.me.role !== 'supervisor' &&
+      state.me.role !== 'interviewer'
+    )
+      view.tab = 'chats';
     if (state.me && state.me.role === 'researcher' && view.tab === 'contacts') view.tab = 'chats';
 
     ensureAnnounceRoom();
@@ -1244,6 +1427,7 @@
   function loginHTML() {
     return `
       <div class="screen login-panel">
+        <div class="login-toolbar">${themeToggleButtonHtml()}</div>
         <h1>H-채팅</h1>
         <p class="sub">아이디·비밀번호로 로그인 (역할은 계정에 따름)</p>
         ${buildPublicTunnelAdminHtml()}
@@ -1379,6 +1563,7 @@
       });
     }
     bindLanCopyButtons(el.root);
+    bindThemeToggle();
   }
 
   function pruneStalePinsForCurrentUser() {
@@ -1489,6 +1674,10 @@
       listBody = accountsAdminHTML();
     } else if (view.tab === 'feedback') {
       listBody = feedbackTabHTML(me);
+    } else if (view.tab === 'devbulk' && canManageAccounts()) {
+      listBody = devBulkTabHTML();
+    } else if (view.tab === 'traffic' && (me.role === 'supervisor' || me.role === 'interviewer')) {
+      listBody = trafficToolTabHTML();
     }
 
     const annBtn =
@@ -1514,7 +1703,20 @@
       ? `<button type="button" class="tab ${view.tab === 'contacts' ? 'active' : ''}" data-tab="contacts">주소록</button>`
       : '';
     const tabFeedbackBtn = `<button type="button" class="tab ${view.tab === 'feedback' ? 'active' : ''}" data-tab="feedback">질문 / 의견</button>`;
-    const fabHidden = view.tab === 'accounts' || view.tab === 'feedback' ? ' hidden' : '';
+    const tabDevBulkBtn = showAccTab
+      ? `<button type="button" class="tab ${view.tab === 'devbulk' ? 'active' : ''}" data-tab="devbulk">개발자 모드</button>`
+      : '';
+    const showTrafficToolTab = me.role === 'supervisor' || me.role === 'interviewer';
+    const tabTrafficBtn = showTrafficToolTab
+      ? `<button type="button" class="tab ${view.tab === 'traffic' ? 'active' : ''}" data-tab="traffic">교통비</button>`
+      : '';
+    const fabHidden =
+      view.tab === 'accounts' ||
+      view.tab === 'feedback' ||
+      view.tab === 'devbulk' ||
+      view.tab === 'traffic'
+        ? ' hidden'
+        : '';
 
     const chatNotifyPrefBar =
       showAccTab && view.tab === 'chats'
@@ -1532,7 +1734,7 @@
         <header class="main-header">
           <div class="main-header-ident">
             <span class="who">${escapeHtml(me.name)}</span>
-            <span class="role-badge" style="background:var(--${roleInfo.className});color:#fff;">${roleInfo.label}</span>
+            <span class="role-badge" style="background:var(--${roleInfo.className});color:var(--text-on-accent);">${roleInfo.label}</span>
             ${rtBadge}
             ${annBtn}
             ${staffPresenceControlHtml('main')}
@@ -1547,7 +1749,10 @@
                 : ''
             }
           </div>
-          <button type="button" class="btn btn-ghost" id="btn-logout">나가기</button>
+          <div class="main-header-actions">
+            ${themeToggleButtonHtml()}
+            <button type="button" class="btn btn-ghost" id="btn-logout">나가기</button>
+          </div>
         </header>
         ${buildLanAccessBannerHtml()}
         <nav class="${tabsClass}">
@@ -1555,6 +1760,8 @@
           ${tabContactsBtn}
           ${tabAccountsBtn}
           ${tabFeedbackBtn}
+          ${tabDevBulkBtn}
+          ${tabTrafficBtn}
         </nav>
         ${chatNotifyPrefBar}
         <div class="list-scroll">${listBody}</div>
@@ -1700,6 +1907,100 @@
     return '<p class="hint">이 탭은 면접원·연구원·슈퍼바이저용입니다.</p>';
   }
 
+  /** 슈퍼바이저·면접원 — 외부 교통·유류비 계산기 (GitHub Pages) */
+  function trafficToolTabHTML() {
+    const u = TRAFFIC_TOOL_URL;
+    const esc = escapeHtml(u);
+    return `
+      <div class="traffic-tool-tab feedback-tab">
+        <h2 class="feedback-heading">교통비 · 거리 계산</h2>
+        <p class="caption">면접·조사 이동 거리·유류비를 잡는 외부 도구입니다. 카카오 경로 API를 쓰는 <a href="${esc}" target="_blank" rel="noopener noreferrer">ROUTE CALC</a> 페이지를 여기에 붙여 두었습니다.</p>
+        <div class="traffic-tool-bar">
+          <a class="btn btn-secondary traffic-tool-open" href="${esc}" target="_blank" rel="noopener noreferrer">새 탭에서 전체 화면으로 열기</a>
+        </div>
+        <div class="traffic-iframe-wrap">
+          <iframe class="traffic-iframe" title="거리 및 유류비 계산기" src="${esc}" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>
+        </div>
+        <p class="caption traffic-tool-note">일부 브라우저에서는 아래 창이 비어 보일 수 있습니다. 그때는 위 버튼으로 새 탭에서 이용해 주세요.</p>
+        <p class="caption traffic-tool-credit">도구 페이지: <a href="${esc}" target="_blank" rel="noopener noreferrer">apingdola-boop.github.io/trafficservice.github.io</a></p>
+      </div>`;
+  }
+
+  /** 연구원·슈퍼바이저: 면접원별 개별 문구를 각 1:1 채팅으로 한 번에 전송 */
+  function devBulkTabHTML() {
+    if (!state.me || !isStaffAccountRole(state.me.role)) {
+      return '<p class="hint">이 탭은 연구원·슈퍼바이저만 사용할 수 있습니다.</p>';
+    }
+    const users = state.accounts.filter((u) => u.role === 'interviewer');
+    if (!users.length) {
+      return `<div class="devbulk-tab feedback-tab">
+        <h2 class="feedback-heading">개발자 모드</h2>
+        <p class="hint" style="padding:1rem 0">등록된 면접원이 없습니다. 계정 탭에서 먼저 등록해 주세요.</p>
+      </div>`;
+    }
+    const sortByName = (a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'ko');
+    const byTeam = {};
+    const unassigned = [];
+    for (const u of users) {
+      const tk = u.team && TEAMS[u.team] ? u.team : null;
+      if (!tk) unassigned.push(u);
+      else {
+        if (!byTeam[tk]) byTeam[tk] = [];
+        byTeam[tk].push(u);
+      }
+    }
+    const rowHtml = (u) => {
+      const teamCap = u.team && TEAMS[u.team] ? TEAMS[u.team] : '팀 미지정';
+      return `<div class="devbulk-row" data-devbulk-user="${escapeHtml(u.id)}">
+        <div class="devbulk-row-head">
+          <span class="devbulk-name">${escapeHtml(u.name)}</span>
+          <span class="caption">${escapeHtml(teamCap)}</span>
+        </div>
+        <div class="field devbulk-field">
+          <textarea class="devbulk-textarea" rows="2" data-devbulk-ta="${escapeHtml(u.id)}" placeholder="메시지 (사진만 보낼 때는 비워도 됨)"></textarea>
+        </div>
+        <div class="devbulk-preview-slot" data-devbulk-preview-slot="${escapeHtml(u.id)}"></div>
+        <div class="devbulk-attach-row">
+          <label class="devbulk-img-pick">
+            <span>📷 사진 첨부</span>
+            <input type="file" accept="image/*" class="devbulk-file" data-devbulk-file="${escapeHtml(u.id)}" />
+          </label>
+          <span class="caption devbulk-img-hint" data-devbulk-img-hint="${escapeHtml(u.id)}"></span>
+        </div>
+      </div>`;
+    };
+    let inner = '';
+    for (const tid of TEAM_ORDER) {
+      const list = byTeam[tid];
+      if (!list || !list.length) continue;
+      inner += `<div class="devbulk-team-title">${escapeHtml(TEAMS[tid])}</div>`;
+      inner += [...list].sort(sortByName).map(rowHtml).join('');
+    }
+    if (unassigned.length) {
+      inner += `<div class="devbulk-team-title">팀 미지정</div>`;
+      inner += [...unassigned].sort(sortByName).map(rowHtml).join('');
+    }
+    return `
+      <div class="devbulk-tab feedback-tab">
+        <h2 class="feedback-heading">개발자 모드</h2>
+        <p class="caption">면접원마다 메시지·사진을 다르게 넣고「한꺼번에 전송」하면 각자 1:1 채팅으로 동시에 갑니다. <strong>메시지와 사진이 모두 비어 있으면</strong> 그 면접원에게는 보내지 않습니다. 사진만 보낼 수도 있습니다.</p>
+        <div class="devbulk-toolbar">
+          <div class="field" style="margin-bottom:0.75rem">
+            <label for="devbulk-common">공통 문구 <span class="caption">(선택 · 아래에서 사람마다 수정 가능)</span></label>
+            <textarea id="devbulk-common" rows="2" placeholder="예: 4월 9일까지 제출 부탁드립니다. (모든 면접원 칸에 한번에 넣으려면 아래 버튼 사용)"></textarea>
+          </div>
+          <button type="button" class="btn btn-secondary" id="devbulk-fill-all">모든 면접원 칸에 넣기</button>
+        </div>
+        <div class="devbulk-list">${inner}</div>
+        <button type="button" class="btn btn-primary devbulk-send-btn" id="devbulk-send">한꺼번에 전송</button>
+        <section class="devbulk-future" aria-label="추가 도구 예정 영역">
+          <h3 class="devbulk-future-heading">추가 기능 (예정)</h3>
+          <p class="caption">개발자 모드에 다른 도구·자동화를 단계적으로 붙일 수 있도록 아래 여백을 두었습니다.</p>
+          <div class="devbulk-future-placeholder"></div>
+        </section>
+      </div>`;
+  }
+
   function accountsAdminHTML() {
     const rows = [...state.accounts].sort((a, b) => a.loginId.localeCompare(b.loginId));
     const cards = rows
@@ -1775,7 +2076,11 @@
 
     document.querySelectorAll('.tab').forEach((t) => {
       t.addEventListener('click', () => {
-        view.tab = t.dataset.tab;
+        const next = t.dataset.tab;
+        if (view.tab === 'devbulk' && next !== 'devbulk') {
+          for (const k of Object.keys(devBulkPendingImageByIvId)) delete devBulkPendingImageByIvId[k];
+        }
+        view.tab = next;
         render();
       });
     });
@@ -1866,6 +2171,135 @@
           showToast('삭제했습니다.');
           render();
         });
+      });
+    }
+
+    if (view.tab === 'devbulk' && canManageAccounts()) {
+      document.getElementById('devbulk-fill-all')?.addEventListener('click', () => {
+        const com = (document.getElementById('devbulk-common')?.value || '').trim();
+        if (!com) {
+          showToast('공통 문구 칸에 먼저 내용을 입력해 주세요.');
+          return;
+        }
+        document.querySelectorAll('.devbulk-textarea').forEach((ta) => {
+          ta.value = com;
+        });
+        showToast('모든 면접원 입력란에 넣었습니다. 필요하면 각 사람 줄만 고쳐 주세요.');
+      });
+
+      document.querySelectorAll('.devbulk-file').forEach((inp) => {
+        inp.addEventListener('change', () => {
+          const ivId = inp.getAttribute('data-devbulk-file');
+          const row = inp.closest('.devbulk-row');
+          if (!ivId || !row) {
+            inp.value = '';
+            return;
+          }
+          const f = inp.files && inp.files[0];
+          inp.value = '';
+          if (!f) return;
+          if (!fileLooksImage(f)) {
+            showToast('사진만 첨부할 수 있습니다.');
+            return;
+          }
+          if (f.size > MAX_CHAT_IMAGE_SOURCE_BYTES) {
+            showToast('사진 원본이 너무 큽니다. 다른 파일을 선택해 주세요.');
+            return;
+          }
+          const slot = row.querySelector(`[data-devbulk-preview-slot="${ivId}"]`);
+          const hint = row.querySelector(`[data-devbulk-img-hint="${ivId}"]`);
+          if (hint) hint.textContent = '사진 처리 중…';
+          const applyThumb = (dataUrl) => {
+            delete devBulkPendingImageByIvId[ivId];
+            if (!dataUrl) {
+              if (hint) hint.textContent = '';
+              return;
+            }
+            devBulkPendingImageByIvId[ivId] = dataUrl;
+            if (slot) {
+              slot.innerHTML = `<div class="devbulk-preview">
+                <img src="${escapeDataUrlForAttr(dataUrl)}" alt="" />
+                <button type="button" class="btn btn-ghost devbulk-img-clear" data-devbulk-clear="${escapeHtml(ivId)}">사진 지우기</button>
+              </div>`;
+            }
+            if (hint) hint.textContent = '';
+          };
+          compressImageFileToDataUrl(f).then((dataUrl) => {
+            if (dataUrl) {
+              applyThumb(dataUrl);
+              return;
+            }
+            if (f.size > MAX_CHAT_MEDIA_BYTES) {
+              if (hint) hint.textContent = '';
+              showToast('이 사진은 압축되지 않아 용량 초과입니다.');
+              return;
+            }
+            const fr = new FileReader();
+            fr.onerror = () => {
+              if (hint) hint.textContent = '';
+              showToast('파일을 읽지 못했습니다.');
+            };
+            fr.onload = () => applyThumb(fr.result);
+            fr.readAsDataURL(f);
+          });
+        });
+      });
+
+      document.querySelectorAll('.devbulk-list').forEach((listEl) => {
+        listEl.addEventListener('click', (ev) => {
+          const btn = ev.target.closest('.devbulk-img-clear');
+          if (!btn) return;
+          ev.preventDefault();
+          const ivId = btn.getAttribute('data-devbulk-clear');
+          if (!ivId) return;
+          delete devBulkPendingImageByIvId[ivId];
+          const row = btn.closest('.devbulk-row');
+          const slot = row && row.querySelector(`[data-devbulk-preview-slot="${ivId}"]`);
+          if (slot) slot.innerHTML = '';
+          const hint = row && row.querySelector(`[data-devbulk-img-hint="${ivId}"]`);
+          if (hint) hint.textContent = '';
+        });
+      });
+
+      document.getElementById('devbulk-send')?.addEventListener('click', () => {
+        if (!state.me || !isStaffAccountRole(state.me.role)) return;
+        const tas = document.querySelectorAll('.devbulk-textarea');
+        let sent = 0;
+        for (const ta of tas) {
+          const ivId = ta.getAttribute('data-devbulk-ta');
+          if (!ivId) continue;
+          const text = (ta.value || '').trim();
+          const imageData = devBulkPendingImageByIvId[ivId] || null;
+          if (!text && !imageData) continue;
+          const acc = state.accounts.find((a) => a.id === ivId && a.role === 'interviewer');
+          if (!acc) continue;
+          const room = ensureDmRoom(ivId);
+          normalizeRoomModeration(room);
+          if (!state.messages[room.id]) state.messages[room.id] = [];
+          state.messages[room.id].push({
+            id: uid(),
+            senderId: state.me.id,
+            text: text || (imageData ? '(사진)' : ''),
+            image: imageData,
+            video: null,
+            ts: Date.now(),
+            isAnnouncement: false,
+          });
+          room.updatedAt = Date.now();
+          if (imageData && !text) room.lastPreview = '📷 사진';
+          else if (imageData) room.lastPreview = ('📷 ' + text).slice(0, 40);
+          else room.lastPreview = text.slice(0, 40);
+          delete devBulkPendingImageByIvId[ivId];
+          sent += 1;
+          ta.value = '';
+        }
+        if (!sent) {
+          showToast('보낼 내용이 없습니다. 메시지 또는 사진을 최소 한 면접원 칸에 넣어 주세요.');
+          return;
+        }
+        saveState();
+        showToast(`${sent}명의 면접원에게 1:1로 보냈습니다.`);
+        render();
       });
     }
 
@@ -1974,6 +2408,7 @@
       });
     }
     bindLanCopyButtons(el.root);
+    bindThemeToggle();
   }
 
   function openAnnounceModal() {
@@ -2114,6 +2549,7 @@
           senderId: state.me.id,
           text: '【방 공지】' + title + (body ? '\n' + body : ''),
           image: null,
+          video: null,
           ts: Date.now(),
           isRoomNotice: true,
         });
@@ -2945,6 +3381,14 @@
     if (!state.me) return '';
     return msgs
       .map((m) => {
+        if (m.isAbsenceAutoReply) {
+          return `
+          <div class="bubble-row bubble-row--auto-absence">
+            <div class="bubble bubble--auto-absence">${escapeHtml(m.text).replace(/\n/g, '<br/>')}</div>
+            <div class="msg-time">${formatTime(m.ts)}</div>
+          </div>
+        `;
+        }
         const isMe = m.senderId === state.me.id;
         const sender = userById(m.senderId);
         const name = sender ? sender.name : '알 수 없음';
@@ -2954,13 +3398,18 @@
             : '';
         const imgHtml =
           m.image && String(m.image).startsWith('data:image/')
-            ? `<img class="chat-img" src="${String(m.image).replace(/"/g, '&quot;')}" alt="" />`
+            ? `<img class="chat-img" src="${escapeDataUrlForAttr(m.image)}" alt="" />`
             : '';
+        const videoHtml =
+          m.video && String(m.video).startsWith('data:video/')
+            ? `<video class="chat-video" controls playsinline preload="metadata" src="${escapeDataUrlForAttr(m.video)}"></video>`
+            : '';
+        const mediaHtml = imgHtml + videoHtml;
         const annClass = m.isAnnouncement || m.isRoomNotice ? ' announce' : '';
         return `
           <div class="bubble-row ${isMe ? 'me' : 'them'}">
             ${!isMe ? `<div class="bubble-sender">${escapeHtml(name)}${senderTeam}</div>` : ''}
-            <div class="bubble${annClass}">${escapeHtml(m.text).replace(/\n/g, '<br/>')}${imgHtml}</div>
+            <div class="bubble${annClass}">${escapeHtml(m.text).replace(/\n/g, '<br/>')}${mediaHtml}</div>
             <div class="msg-time">${formatTime(m.ts)}</div>
           </div>
         `;
@@ -3055,9 +3504,9 @@
         <div class="chat-composer-fixed" role="region" aria-label="메시지 입력">
         ${lockHint}
         <div class="${inputBarClass}">
-          <label class="attach" title="사진">
-            <span>🖼</span>
-            <input type="file" id="file-img" accept="image/*" aria-label="사진 첨부"${ivBlocked ? ' disabled' : ''} />
+          <label class="attach" title="사진·동영상">
+            <span>📎</span>
+            <input type="file" id="file-media" accept="image/*,video/*" aria-label="사진·동영상 첨부"${ivBlocked ? ' disabled' : ''} />
           </label>
           ${msgField}
           <button type="button" class="send" id="btn-send"${ivBlocked ? ' disabled' : ''}>전송</button>
@@ -3072,6 +3521,7 @@
             ${staffPresenceChat}
             <div class="chat-title">${titleHtml}</div>
             <div class="chat-header-trailing">
+              ${themeToggleButtonHtml('btn-theme--compact')}
               <button type="button" class="chat-header-video" id="btn-video-call" title="화상 회의">화상</button>
               <button type="button" class="chat-header-members" id="chat-members-btn" title="참가자">참가자</button>
               <button type="button" class="chat-header-leave" id="chat-leave-btn">나가기</button>
@@ -3084,6 +3534,7 @@
             ${staffPresenceChat}
             <div class="chat-title">${titleHtml}${dmStaffPresenceInTitle}</div>
             <div class="chat-header-trailing">
+              ${themeToggleButtonHtml('btn-theme--compact')}
               <button type="button" class="chat-header-video" id="btn-video-call" title="화상 회의">화상</button>
               <button type="button" class="chat-header-leave" id="chat-leave-btn">나가기</button>
             </div>
@@ -3240,21 +3691,66 @@
       showToast('단체방에서 면접원 채팅이 아직 허용되지 않았습니다. 연구원·슈퍼바이저에게「면접원 채팅 허용」을 요청하세요.');
     });
 
-    let pendingImage = null;
-    const fileInput = document.getElementById('file-img');
+    let pendingAttachment = null;
+    const fileInput = document.getElementById('file-media');
     if (fileInput) {
       fileInput.addEventListener('change', () => {
         const r0 = state.rooms.find((x) => x.id === view.roomId);
         if (r0 && interviewerChatSendBlocked(r0)) return;
         const f = fileInput.files && fileInput.files[0];
-        if (!f || !f.type.startsWith('image/')) return;
-        const reader = new FileReader();
-        reader.onload = () => {
-          pendingImage = reader.result;
-          showToast('사진이 첨부되었습니다. 전송을 누르세요.');
-        };
-        reader.readAsDataURL(f);
         fileInput.value = '';
+        if (!f) return;
+        const isImg = fileLooksImage(f);
+        const isVid = fileLooksVideo(f);
+        if (!isImg && !isVid) {
+          showToast('사진 또는 동영상만 첨부할 수 있습니다.');
+          return;
+        }
+        let kind = null;
+        if (isVid && isImg) kind = (f.type || '').startsWith('video/') ? 'video' : 'image';
+        else if (isVid) kind = 'video';
+        else kind = 'image';
+
+        if (kind === 'video') {
+          if (f.size > MAX_CHAT_MEDIA_BYTES) {
+            showToast('동영상 용량이 너무 큽니다(약 36MB 이하). 더 짧게 녹화하거나 편집해 주세요.');
+            return;
+          }
+          const reader = new FileReader();
+          reader.onerror = () => showToast('파일을 읽지 못했습니다. 다시 시도해 주세요.');
+          reader.onload = () => {
+            pendingAttachment = { kind: 'video', dataUrl: reader.result };
+            showToast('동영상이 첨부되었습니다. 전송을 누르세요.');
+          };
+          reader.readAsDataURL(f);
+          return;
+        }
+
+        if (f.size > MAX_CHAT_IMAGE_SOURCE_BYTES) {
+          showToast('사진 원본이 너무 큽니다(약 80MB 이하를 선택해 주세요).');
+          return;
+        }
+
+        compressImageFileToDataUrl(f).then((dataUrl) => {
+          if (dataUrl) {
+            pendingAttachment = { kind: 'image', dataUrl };
+            showToast('사진이 첨부되었습니다. 전송을 누르세요.');
+            return;
+          }
+          if (f.size > MAX_CHAT_MEDIA_BYTES) {
+            showToast(
+              '이 사진은 이 기기에서 자동 압축이 되지 않았고 원본도 커서 보낼 수 없습니다. 스크린샷을 JPEG로 저장하거나 다른 사진을 선택해 주세요.'
+            );
+            return;
+          }
+          const reader = new FileReader();
+          reader.onerror = () => showToast('파일을 읽지 못했습니다. 다시 시도해 주세요.');
+          reader.onload = () => {
+            pendingAttachment = { kind: 'image', dataUrl: reader.result };
+            showToast('사진이 첨부되었습니다. 전송을 누르세요.');
+          };
+          reader.readAsDataURL(f);
+        });
       });
     }
 
@@ -3262,7 +3758,7 @@
       const ta = document.getElementById('msg-input');
       if (!ta) return;
       const text = (ta.value || '').trim();
-      if (!text && !pendingImage) return;
+      if (!text && !pendingAttachment) return;
       const room = state.rooms.find((r) => r.id === view.roomId);
       if (!room) return;
       normalizeRoomModeration(room);
@@ -3271,20 +3767,39 @@
         return;
       }
 
+      const cap =
+        pendingAttachment && pendingAttachment.kind === 'video' ? '(동영상)' : pendingAttachment ? '(사진)' : '';
       const msg = {
         id: uid(),
         senderId: state.me.id,
-        text: text || (pendingImage ? '(사진)' : ''),
-        image: pendingImage,
+        text: text || cap,
+        image: pendingAttachment && pendingAttachment.kind === 'image' ? pendingAttachment.dataUrl : null,
+        video: pendingAttachment && pendingAttachment.kind === 'video' ? pendingAttachment.dataUrl : null,
         ts: Date.now(),
         isAnnouncement: false,
       };
       if (!state.messages[room.id]) state.messages[room.id] = [];
       state.messages[room.id].push(msg);
+      if (state.me.role === 'interviewer' && roomHasStaffAwayOrVacation(room)) {
+        state.messages[room.id].push({
+          id: uid(),
+          senderId: state.me.id,
+          text: AUTO_ABSENCE_REPLY_TEXT,
+          image: null,
+          video: null,
+          ts: Date.now(),
+          isAnnouncement: false,
+          isAbsenceAutoReply: true,
+        });
+      }
       room.updatedAt = Date.now();
-      room.lastPreview = pendingImage ? '📷 사진' : text.slice(0, 40);
+      room.lastPreview = pendingAttachment
+        ? pendingAttachment.kind === 'video'
+          ? '🎬 동영상'
+          : '📷 사진'
+        : text.slice(0, 40);
       saveState();
-      pendingImage = null;
+      pendingAttachment = null;
       ta.value = '';
       render();
     }
@@ -3322,10 +3837,13 @@
         send();
       });
     }
+
+    bindThemeToggle();
   }
 
   async function init() {
     el.root = document.getElementById('app');
+    applyTheme(getTheme());
     await initRealtimeConnection();
     await refreshLanAccessHint();
     await migrateAndSeed();
