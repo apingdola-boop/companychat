@@ -1050,7 +1050,7 @@ h1 {
   flex-direction: column;
   min-height: 0;
   min-width: 0;
-  overflow-x: hidden;
+  overflow: hidden;
 }
 
 .chat-side-backdrop {
@@ -1068,6 +1068,8 @@ h1 {
 
 .chat-layout--panel-open .chat-side-backdrop {
   display: block;
+  /* inset:0 이면 입력줄까지 덮여 탭이 백드롭으로만 가는 브라우저에서 키보드가 안 뜸 */
+  bottom: calc(5.25rem + var(--safe-bottom));
 }
 
 .chat-side-panel {
@@ -1221,23 +1223,18 @@ h1 {
   flex-direction: column;
   gap: 0.65rem;
   min-height: 0;
-  /* chat-composer-fixed 높이만큼 하단 여백 */
-  padding-bottom: calc(1rem + 7rem + var(--safe-bottom));
+  padding-bottom: calc(1rem + var(--safe-bottom));
 }
 
-/* 채팅 하단: 모바일에서 flex로 밀려 안 보이던 입력창을 뷰포트에 고정 */
+/* position:fixed 입력창 + 키보드 + resizes-content 조합이 모바일에서 뷰포트를 반복 조정(키보드 튐)함 — 문서 흐름에 두고 textarea 유지와 IME 안정에 유리 */
 .chat-composer-fixed {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  position: relative;
+  flex-shrink: 0;
   width: 100%;
-  max-width: 480px;
-  margin: 0 auto;
-  z-index: 120;
+  z-index: 2;
   background: var(--surface);
   border-top: 1px solid var(--border);
-  box-shadow: 0 -8px 28px rgba(0, 0, 0, 0.28);
+  box-shadow: 0 -4px 18px rgba(0, 0, 0, 0.2);
   pointer-events: auto;
 }
 
@@ -1323,9 +1320,8 @@ h1 {
 
 .input-bar {
   flex-shrink: 0;
-  position: sticky;
-  bottom: 0;
-  z-index: 5;
+  position: relative;
+  z-index: 6;
   display: flex;
   align-items: flex-end;
   gap: 0.4rem;

@@ -88,6 +88,12 @@ if (!dataFileExists) {
   }
 }
 
+if (!Array.isArray(shared.accounts) || shared.accounts.length === 0) {
+  console.warn('[companychat] 계정 목록이 비어 있어 데모 계정을 채웁니다.');
+  shared.accounts = seedDemoAccounts();
+  saveSharedToDisk(shared);
+}
+
 /** 예전 기본값(false)으로 면접원 채팅만 막혀 있던 일반 단체방을 한 번 열어 준다(전체 공지방 제외). */
 function migrateInterviewerChatRoomDefault() {
   if (shared.__ivChatGeneralDefaultFix) return;
@@ -115,13 +121,37 @@ function schedulePersist() {
   }, 120);
 }
 
+/** 방 단위로 메시지 배열을 id 기준 병합 — 한 클라이언트의 오래된 payload 가 전체 messages 를 덮어 최신 글을 지우는 것을 막음 */
+function mergeMessageMaps(serverMsgs, clientMsgs) {
+  const base = serverMsgs && typeof serverMsgs === 'object' ? serverMsgs : {};
+  if (!clientMsgs || typeof clientMsgs !== 'object') return base;
+  const out = { ...base };
+  for (const roomId of Object.keys(clientMsgs)) {
+    const incoming = clientMsgs[roomId];
+    if (!Array.isArray(incoming)) continue;
+    const cur = Array.isArray(out[roomId]) ? out[roomId] : [];
+    const byId = new Map();
+    for (const m of cur) {
+      if (m && typeof m === 'object' && m.id) byId.set(m.id, m);
+    }
+    for (const m of incoming) {
+      if (m && typeof m === 'object' && m.id) byId.set(m.id, m);
+    }
+    out[roomId] = Array.from(byId.values()).sort((a, b) => (Number(a.ts) || 0) - (Number(b.ts) || 0));
+  }
+  return out;
+}
+
 function mergeSharedUpdate(payload) {
   if (!payload || typeof payload !== 'object') return;
   shared = {
     ...shared,
     accounts: Array.isArray(payload.accounts) ? payload.accounts : shared.accounts,
     rooms: Array.isArray(payload.rooms) ? payload.rooms : shared.rooms,
-    messages: payload.messages && typeof payload.messages === 'object' ? payload.messages : shared.messages,
+    messages:
+      payload.messages && typeof payload.messages === 'object'
+        ? mergeMessageMaps(shared.messages, payload.messages)
+        : shared.messages,
     feedbackThreads: Array.isArray(payload.feedbackThreads) ? payload.feedbackThreads : shared.feedbackThreads,
     pinnedChatsByUser:
       payload.pinnedChatsByUser && typeof payload.pinnedChatsByUser === 'object'

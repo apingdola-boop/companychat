@@ -437,10 +437,9 @@
   const DEFAULT_SOCKET_PORT = '8787';
   let lastSocketConnectBase = '';
   let realtimeConnectError = '';
-  /** 한글 IME 조합 중 render() 하면 조합이 깨지고 글자가 사라진 것처럼 보임 */
-  let chatComposerIMEComposing = false;
-  let sharedStateRenderDeferredWhileComposing = false;
-
+  /** 채팅 IME 조합 중 #msg-list innerHTML 갱신이 일부 환경에서 조합을 끊을 수 있어 패치를 늦춤 */
+  let chatImeComposing = false;
+  let chatInboxPatchPending = false;
   function normalizeSocketBaseUrl(u) {
     let s = String(u || '').trim();
     if (!s) return '';
@@ -738,7 +737,6 @@
       }
       realtimeSocket.on('shared:state', (payload) => {
         const hadMe = !!state.me;
-        const composerSnap = snapshotChatComposerIfAny();
         applySharedPayload(payload);
         realtimeSyncedFromServer = true;
         realtimeConnectError = '';
@@ -746,17 +744,13 @@
         const lostSession = hadMe && !state.me;
         try {
           if (lostSession) {
-            sharedStateRenderDeferredWhileComposing = false;
             render();
           } else if (shouldPatchLoginInsteadOfRender()) {
             patchLoginSocketUiOnly();
-          } else if (view.screen === 'chat' && chatComposerIMEComposing) {
-            /* 상태는 반영했으나 DOM 갱신은 조합 종료 후로 미룸 */
-            sharedStateRenderDeferredWhileComposing = true;
+          } else if (tryPatchChatInboxOnlyAfterSharedState()) {
+            /* 채팅 중: 말풍선만 갱신 — 입력 textarea DOM 유지 */
           } else {
-            sharedStateRenderDeferredWhileComposing = false;
             render();
-            restoreChatComposerIfAny(composerSnap);
           }
         } catch (_) {
           /* render 아직 정의 전일 수 있음 — 무시 */
@@ -1187,6 +1181,9 @@
     if (!root) return;
 
     if (!state.me) view.screen = 'login';
+    /* 세션은 localStorage(state.me)에만 있고 view.screen 은 항상 초기값 login 이라,
+       로그인된 채로도 로그인 화면이 그려지고 shared:state 마다 전체 DOM 이 갈리며 입력·IME 가 깨짐 */
+    else if (view.screen === 'login') view.screen = 'main';
 
     if (view.screen === 'login') {
       root.innerHTML = loginHTML();
@@ -1290,40 +1287,6 @@
   /** 소켓 disconnect/connect_error/connect 마다 render() 하면 채팅 DOM이 통째로 갈리며 입력창·포커스가 끊김 (Render 등에서 끊김이 잦을 때 치명적) */
   function shouldSkipSocketDrivenRender() {
     return !!(state.me && view.screen === 'chat');
-  }
-
-  /** shared:state 마다 render() 하면 타 사용자·탭 동기화 시 입력 중 내용·포커스가 사라짐 */
-  function snapshotChatComposerIfAny() {
-    if (view.screen !== 'chat') return null;
-    try {
-      const ta = document.getElementById('msg-input');
-      if (!ta || ta.disabled) return null;
-      return {
-        value: ta.value,
-        focus: document.activeElement === ta,
-        start: typeof ta.selectionStart === 'number' ? ta.selectionStart : null,
-        end: typeof ta.selectionEnd === 'number' ? ta.selectionEnd : null,
-      };
-    } catch (_) {
-      return null;
-    }
-  }
-
-  function restoreChatComposerIfAny(snap) {
-    if (!snap) return;
-    requestAnimationFrame(() => {
-      try {
-        const ta = document.getElementById('msg-input');
-        if (!ta || ta.disabled) return;
-        ta.value = snap.value;
-        if (snap.start != null && snap.end != null) {
-          try {
-            ta.setSelectionRange(snap.start, snap.end);
-          } catch (_) {}
-        }
-        if (snap.focus) ta.focus();
-      } catch (_) {}
-    });
   }
 
   function patchLoginSocketUiOnly() {
@@ -2786,7 +2749,9 @@
     }
     delete state._migrateV1;
 
-    if (!state.accounts.length && !realtimeSyncedFromServer) {
+    /* 서버가 빈 accounts(손상 복구·빈 파일 등)를 보냈을 때 realtimeSyncedFromServer 가 이미 true 면
+       예전 조건 때문에 시드를 건너뛰어 로그인 가능한 계정이 전무해질 수 있음 */
+    if (!state.accounts.length) {
       const rows = [
         { id: 'demo-r1', loginId: 'researcher1', password: 'demo1234', name: '김연구', role: 'researcher' },
         { id: 'demo-r2', loginId: 'researcher2', password: 'demo1234', name: '이실험', role: 'researcher' },
@@ -2981,21 +2946,11 @@
     });
   }
 
-  function chatHTML() {
-    const room = state.rooms.find((r) => r.id === view.roomId);
-    if (!room) {
-      view.screen = 'main';
-      return mainHTML();
-    }
-    normalizeRoomModeration(room);
-    const titleHtml = roomDisplayTitleHtml(room);
-    const staffPresenceChat = staffPresenceControlHtml('chat');
-    const dmStaffPresenceInTitle = dmOtherStaffPresenceDotHtml(room);
-    const msgs = state.messages[room.id] || [];
-    const ivBlocked = interviewerChatSendBlocked(room);
-    const showMod = canPostRoomModeration();
-
-    const bubbles = msgs
+  /** 채팅 말풍선 HTML — shared:state 시 목록만 갈아끼울 때도 동일 규칙 사용 */
+  function chatBubbleRowsHtml(roomId) {
+    const msgs = state.messages[roomId] || [];
+    if (!state.me) return '';
+    return msgs
       .map((m) => {
         const isMe = m.senderId === state.me.id;
         const sender = userById(m.senderId);
@@ -3018,6 +2973,48 @@
         `;
       })
       .join('');
+  }
+
+  function flushChatInboxFromState() {
+    if (view.screen !== 'chat' || !view.roomId || !state.me) return;
+    const room = state.rooms.find((r) => r.id === view.roomId);
+    const list = document.getElementById('msg-list');
+    if (!room || !list) return;
+    list.innerHTML = chatBubbleRowsHtml(room.id);
+    list.scrollTop = list.scrollHeight;
+  }
+
+  /** 실시간 동기화 시 채팅 textarea 를 건드리지 않고 말풍선만 갱신 (한글 IME·전송 직후 목록 유실 방지) */
+  function tryPatchChatInboxOnlyAfterSharedState() {
+    if (view.screen !== 'chat' || !view.roomId || !state.me) return false;
+    const room = state.rooms.find((r) => r.id === view.roomId);
+    if (!room) return false;
+    const list = document.getElementById('msg-list');
+    if (!list) return false;
+    const ta = document.getElementById('msg-input');
+    if (ta && chatImeComposing) {
+      chatInboxPatchPending = true;
+      return true;
+    }
+    flushChatInboxFromState();
+    chatInboxPatchPending = false;
+    return true;
+  }
+
+  function chatHTML() {
+    const room = state.rooms.find((r) => r.id === view.roomId);
+    if (!room) {
+      view.screen = 'main';
+      return mainHTML();
+    }
+    normalizeRoomModeration(room);
+    const titleHtml = roomDisplayTitleHtml(room);
+    const staffPresenceChat = staffPresenceControlHtml('chat');
+    const dmStaffPresenceInTitle = dmOtherStaffPresenceDotHtml(room);
+    const ivBlocked = interviewerChatSendBlocked(room);
+    const showMod = canPostRoomModeration();
+
+    const bubbles = chatBubbleRowsHtml(room.id);
 
     const annStrip =
       state.me.role === 'supervisor' && !room.isAnnounceFeed
@@ -3052,13 +3049,15 @@
       : '';
 
     const lockHint = ivBlocked
-      ? `<div class="chat-lock-hint">단체방에서는 연구원·슈퍼바이저가「면접원 채팅 허용」을 켠 뒤에만 메시지를 보낼 수 있습니다.</div>`
+      ? room.isAnnounceFeed
+        ? `<div class="chat-lock-hint" role="status">면접원은 <strong>전체 공지 피드</strong> 방에 글을 쓸 수 없습니다. 일반 채팅방을 이용하거나 연구원·슈퍼바이저 계정으로 로그인해 주세요.</div>`
+        : `<div class="chat-lock-hint" role="status">면접원은 이 단체방에서 연구원·슈퍼바이저가 <strong>「면접원 채팅 허용」</strong>을 켠 뒤에만 입력할 수 있습니다. (지금 화면은 키보드 입력란이 없는 <strong>안내 버튼</strong>만 보일 수 있습니다.)</div>`
       : '';
     const inputBarClass = ivBlocked ? 'input-bar input-bar--locked' : 'input-bar';
     /* iOS: disabled textarea는 포커스·키보드가 안 뜨는 경우가 많아, 막힌 경우에는 안내 버튼만 둠 */
     const msgField = ivBlocked
       ? `<button type="button" class="msg-input-placeholder" id="msg-input-blocked-hint" aria-label="면접원 채팅 안내">면접원 채팅이 아직 허용되지 않았습니다. 탭하여 안내를 확인하세요.</button>`
-      : `<textarea id="msg-input" rows="1" placeholder="메시지 입력…" aria-label="메시지 입력" autocomplete="off" autocorrect="on" autocapitalize="sentences" inputmode="text" enterkeyhint="send"></textarea>`;
+      : `<textarea id="msg-input" rows="1" placeholder="메시지 입력…" aria-label="메시지 입력" autocomplete="off" inputmode="text" enterkeyhint="send"></textarea>`;
     const inputBar = `
         <div class="chat-composer-fixed" role="region" aria-label="메시지 입력">
         ${lockHint}
@@ -3151,6 +3150,8 @@
   }
 
   function bindChat() {
+    chatImeComposing = false;
+    chatInboxPatchPending = false;
     if (state.me && view.roomId) markRoomAsRead(state.me.id, view.roomId);
 
     const list = document.getElementById('msg-list');
@@ -3298,62 +3299,34 @@
     const msgInput = document.getElementById('msg-input');
     if (msgInput) {
       document.getElementById('btn-send')?.addEventListener('click', send);
+      msgInput.addEventListener(
+        'focusin',
+        () => {
+          requestAnimationFrame(() => {
+            try {
+              msgInput.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+            } catch (_) {}
+          });
+        },
+        { passive: true }
+      );
       msgInput.addEventListener('compositionstart', () => {
-        chatComposerIMEComposing = true;
+        chatImeComposing = true;
       });
       msgInput.addEventListener('compositionend', () => {
-        chatComposerIMEComposing = false;
-        if (sharedStateRenderDeferredWhileComposing) {
-          sharedStateRenderDeferredWhileComposing = false;
-          const postSnap = snapshotChatComposerIfAny();
+        chatImeComposing = false;
+        if (chatInboxPatchPending) {
+          chatInboxPatchPending = false;
           try {
-            render();
-            restoreChatComposerIfAny(postSnap);
+            flushChatInboxFromState();
           } catch (_) {}
         }
       });
       msgInput.addEventListener('keydown', (e) => {
         if (e.key !== 'Enter' || e.shiftKey) return;
-        /* 한글 등 IME 조합·후보 중에는 Enter 로 전송하지 않음 (229: 일부 브라우저 IME 처리 중) */
         if (e.isComposing || e.keyCode === 229) return;
         e.preventDefault();
         send();
-      });
-      function scrollInputIntoViewForKeyboard() {
-        if (chatComposerIMEComposing) return;
-        requestAnimationFrame(() => {
-          try {
-            msgInput.scrollIntoView({ block: 'end', inline: 'nearest', behavior: 'smooth' });
-          } catch (_) {}
-          try {
-            const vv = window.visualViewport;
-            if (!vv) return;
-            const bar = msgInput.closest('.input-bar');
-            if (!bar) return;
-            const rect = bar.getBoundingClientRect();
-            const obscured = rect.bottom > vv.height - 8;
-            if (obscured) {
-              window.scrollBy(0, rect.bottom - vv.height + 16);
-            }
-          } catch (_) {}
-        });
-      }
-      msgInput.addEventListener('focus', scrollInputIntoViewForKeyboard);
-      if (window.visualViewport) {
-        window.visualViewport.addEventListener('resize', () => {
-          if (document.activeElement === msgInput && !chatComposerIMEComposing) scrollInputIntoViewForKeyboard();
-        });
-      }
-      msgInput.addEventListener('touchstart', () => {
-        try {
-          msgInput.focus();
-        } catch (_) {}
-      }, { passive: true });
-      document.querySelector('.input-bar')?.addEventListener('click', (ev) => {
-        if (ev.target.closest('textarea#msg-input, .send, .attach, label.attach')) return;
-        try {
-          msgInput.focus();
-        } catch (_) {}
       });
     }
   }
@@ -3365,6 +3338,34 @@
     await migrateAndSeed();
     registerSw();
     render();
+
+    /** 지원용: 개발자도구 콘솔에서 `__companyChatHealth()` 실행 후 결과를 복사해 보내 주세요. */
+    window.__companyChatHealth = () => ({
+      v: 2,
+      page: location.href.split('?')[0],
+      origin: location.origin,
+      hasAppRoot: !!document.getElementById('app'),
+      accountCount: state.accounts ? state.accounts.length : 0,
+      loggedIn: !!state.me,
+      viewScreen: view.screen,
+      socketConnected: !!(realtimeSocket && realtimeSocket.connected),
+      socketTried: lastSocketConnectBase || '',
+      socketError: realtimeConnectError || '',
+      ioScript: typeof io !== 'undefined',
+      localStorageOk: (() => {
+        try {
+          const k = '__cc_ls_probe';
+          localStorage.setItem(k, '1');
+          localStorage.removeItem(k);
+          return true;
+        } catch (e) {
+          return String(e && e.message);
+        }
+      })(),
+      /* 채팅 화면일 때 입력 가능 여부 빠른 판별 */
+      chatHasRealTextarea: !!document.getElementById('msg-input'),
+      chatInterviewerBlockedPlaceholder: !!document.getElementById('msg-input-blocked-hint'),
+    });
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => void init());
