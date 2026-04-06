@@ -757,6 +757,8 @@
         try {
           if (shouldPatchLoginInsteadOfRender()) {
             patchLoginSocketUiOnly();
+          } else if (shouldSkipSocketDrivenRender()) {
+            /* 채팅 입력 유지 — 곧 shared:state 로 동기화 */
           } else {
             render();
           }
@@ -766,6 +768,8 @@
         try {
           if (shouldPatchLoginInsteadOfRender()) {
             patchLoginSocketUiOnly();
+          } else if (shouldSkipSocketDrivenRender()) {
+            /* 전체 render 생략 — 입력 유지 */
           } else {
             render();
           }
@@ -777,6 +781,8 @@
         try {
           if (shouldPatchLoginInsteadOfRender()) {
             patchLoginSocketUiOnly();
+          } else if (shouldSkipSocketDrivenRender()) {
+            /* 전체 render 생략 — 입력 유지 */
           } else {
             render();
           }
@@ -1267,6 +1273,11 @@
 
   function shouldPatchLoginInsteadOfRender() {
     return !state.me && view.screen === 'login' && document.getElementById('login-socket-panel-wrap');
+  }
+
+  /** 소켓 disconnect/connect_error/connect 마다 render() 하면 채팅 DOM이 통째로 갈리며 입력창·포커스가 끊김 (Render 등에서 끊김이 잦을 때 치명적) */
+  function shouldSkipSocketDrivenRender() {
+    return !!(state.me && view.screen === 'chat');
   }
 
   function patchLoginSocketUiOnly() {
