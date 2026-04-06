@@ -437,6 +437,9 @@
   const DEFAULT_SOCKET_PORT = '8787';
   let lastSocketConnectBase = '';
   let realtimeConnectError = '';
+  /** 한글 IME 조합 중 render() 하면 조합이 깨지고 글자가 사라진 것처럼 보임 */
+  let chatComposerIMEComposing = false;
+  let sharedStateRenderDeferredWhileComposing = false;
 
   function normalizeSocketBaseUrl(u) {
     let s = String(u || '').trim();
@@ -742,9 +745,16 @@
         syncSessionMeWithAccounts();
         const lostSession = hadMe && !state.me;
         try {
-          if (!lostSession && shouldPatchLoginInsteadOfRender()) {
+          if (lostSession) {
+            sharedStateRenderDeferredWhileComposing = false;
+            render();
+          } else if (shouldPatchLoginInsteadOfRender()) {
             patchLoginSocketUiOnly();
+          } else if (view.screen === 'chat' && chatComposerIMEComposing) {
+            /* 상태는 반영했으나 DOM 갱신은 조합 종료 후로 미룸 */
+            sharedStateRenderDeferredWhileComposing = true;
           } else {
+            sharedStateRenderDeferredWhileComposing = false;
             render();
             restoreChatComposerIfAny(composerSnap);
           }
@@ -3288,13 +3298,29 @@
     const msgInput = document.getElementById('msg-input');
     if (msgInput) {
       document.getElementById('btn-send')?.addEventListener('click', send);
-      msgInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-          e.preventDefault();
-          send();
+      msgInput.addEventListener('compositionstart', () => {
+        chatComposerIMEComposing = true;
+      });
+      msgInput.addEventListener('compositionend', () => {
+        chatComposerIMEComposing = false;
+        if (sharedStateRenderDeferredWhileComposing) {
+          sharedStateRenderDeferredWhileComposing = false;
+          const postSnap = snapshotChatComposerIfAny();
+          try {
+            render();
+            restoreChatComposerIfAny(postSnap);
+          } catch (_) {}
         }
       });
+      msgInput.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter' || e.shiftKey) return;
+        /* 한글 등 IME 조합·후보 중에는 Enter 로 전송하지 않음 (229: 일부 브라우저 IME 처리 중) */
+        if (e.isComposing || e.keyCode === 229) return;
+        e.preventDefault();
+        send();
+      });
       function scrollInputIntoViewForKeyboard() {
+        if (chatComposerIMEComposing) return;
         requestAnimationFrame(() => {
           try {
             msgInput.scrollIntoView({ block: 'end', inline: 'nearest', behavior: 'smooth' });
@@ -3315,7 +3341,7 @@
       msgInput.addEventListener('focus', scrollInputIntoViewForKeyboard);
       if (window.visualViewport) {
         window.visualViewport.addEventListener('resize', () => {
-          if (document.activeElement === msgInput) scrollInputIntoViewForKeyboard();
+          if (document.activeElement === msgInput && !chatComposerIMEComposing) scrollInputIntoViewForKeyboard();
         });
       }
       msgInput.addEventListener('touchstart', () => {
