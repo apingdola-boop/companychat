@@ -1088,7 +1088,7 @@
   function formatNoticeForExternalShare(title, body, prefix) {
     const t = (title || '').trim();
     const b = (body || '').trim();
-    const p = prefix || '【회사 채팅 공지】';
+    const p = prefix || '【H-채팅 공지】';
     return `${p}${t}${b ? '\n\n' + b : ''}`;
   }
 
@@ -1244,9 +1244,8 @@
   function loginHTML() {
     return `
       <div class="screen login-panel">
-        <h1>회사 채팅</h1>
+        <h1>H-채팅</h1>
         <p class="sub">아이디·비밀번호로 로그인 (역할은 계정에 따름)</p>
-        ${buildLanAccessBannerHtml()}
         ${buildPublicTunnelAdminHtml()}
         <div id="login-socket-panel-wrap">${buildLoginSocketPanelHtml()}</div>
         <div class="field">
@@ -1258,11 +1257,7 @@
           <input type="password" id="login-pw" placeholder="비밀번호" autocomplete="current-password" />
         </div>
         <button type="button" class="btn btn-primary" id="btn-login">로그인</button>
-        <div class="btn-row">
-          <button type="button" class="btn btn-secondary" id="btn-notify">알림 허용 요청</button>
-        </div>
-        <p class="hint">데모 계정: researcher1 / demo1234 · supervisor1 / demo1234 · interviewer1 / demo1234 등. <strong>등록·추가는 연구원·슈퍼바이저만</strong> 「계정」 탭에서 가능하며, 면접원 계정도 여기서 <strong>생성해 줄 수 있습니다</strong>. <span id="login-sync-hint">${loginSyncHintText()}</span></p>
-        <p class="hint">공지를 <strong>카카오톡·문자처럼 상대 폰으로 자동</strong> 보내려면 알림톡/SMS 같은 유료 API와 서버가 필요합니다. 이 웹앱만으로는 상대 기기에 직접 가지 않으며, 공지 화면의 「공유하기」로 글을 복사하거나 휴대폰 공유 기능을 쓸 수 있습니다.</p>
+        <p class="hint"><span id="login-sync-hint">${loginSyncHintText()}</span></p>
       </div>
     `;
   }
@@ -1334,7 +1329,6 @@
       render();
     });
 
-    document.getElementById('btn-notify').addEventListener('click', requestNotifyPermission);
     const btnPubSave = document.getElementById('btn-save-public-url');
     if (btnPubSave) {
       btnPubSave.addEventListener('click', async () => {
@@ -2453,7 +2447,7 @@
     ws['!cols'] = [{ wch: 14 }, { wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 10 }];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, '계정목록');
-    XLSX.writeFile(wb, '회사채팅_계정등록양식.xlsx');
+    XLSX.writeFile(wb, 'H-채팅_계정등록양식.xlsx');
   }
 
   function sheetToAccountRows(matrix) {

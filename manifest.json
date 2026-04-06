@@ -1,6 +1,6 @@
 {
-  "name": "회사 채팅 (초안)",
-  "short_name": "회사채팅",
+  "name": "H-채팅",
+  "short_name": "H-채팅",
   "description": "연구원·슈퍼바이저·면접원 — 개인/단체 채팅, 사진, 공지 알림",
   "start_url": "./index.html",
   "scope": "./",

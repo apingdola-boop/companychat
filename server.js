@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 /**
- * 회사채팅 — 정적 파일 + Socket.IO 실시간 공유 상태
- * npm install && npm start → http://0.0.0.0:8787
+ * H-채팅 — 정적 파일 + Socket.IO + (선택) Supabase Postgres 에 JSON 스냅샷 저장
  *
- * Netlify 등 정적 호스팅만으로는 Socket.IO를 쓸 수 없습니다.
- * Railway / Render / Fly.io / 자체 VPS 등 Node가 돌아가는 곳에 배포하세요.
+ * ■ Supabase 사용 시 Render 디스크 없이도 재배포 후 데이터 유지
+ *   환경변수: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY (대시보드 → Project Settings → API)
+ *   SQL: supabase/migrations/001_company_chat_app_state.sql 실행
+ *
+ * ■ Supabase 미설정 시: DATA_DIR/shared-state.json (로컬·Render 디스크)
  */
 'use strict';
 
@@ -15,14 +17,23 @@ const fs = require('fs');
 const crypto = require('crypto');
 const { networkInterfaces } = require('os');
 const { Server } = require('socket.io');
+const { createClient } = require('@supabase/supabase-js');
 
 const ROOT = path.resolve(__dirname);
 const PORT = Number(process.env.PORT) || 8787;
 const HOST = process.env.HOST || '0.0.0.0';
-/** Fly·Render 디스크 마운트 등: 환경변수 DATA_DIR 로 변경 가능 */
 const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(ROOT, 'data');
 const DATA_FILE = path.join(DATA_DIR, 'shared-state.json');
 const PUBLIC_URL_FILE = path.join(DATA_DIR, 'public-base-url.txt');
+
+const APP_STATE_TABLE = 'company_chat_app_state';
+const APP_STATE_ID = 'main';
+
+function useSupabase() {
+  const u = process.env.SUPABASE_URL && String(process.env.SUPABASE_URL).trim();
+  const k = process.env.SUPABASE_SERVICE_ROLE_KEY && String(process.env.SUPABASE_SERVICE_ROLE_KEY).trim();
+  return !!(u && k);
+}
 
 function sha256Hex(plain) {
   return crypto.createHash('sha256').update(String(plain), 'utf8').digest('hex');
@@ -70,58 +81,59 @@ function saveSharedToDisk(obj) {
   fs.writeFileSync(DATA_FILE, JSON.stringify(obj, null, 0), 'utf8');
 }
 
-let shared;
-const dataFileExists = fs.existsSync(DATA_FILE);
-if (!dataFileExists) {
-  shared = { ...emptyShared(), accounts: seedDemoAccounts() };
-  saveSharedToDisk(shared);
-} else {
+/** @type {ReturnType<typeof createClient> | null} */
+let supabase = null;
+let shared = emptyShared();
+let saveTimer = null;
+
+async function loadSharedFromSupabase() {
+  const { data, error } = await supabase
+    .from(APP_STATE_TABLE)
+    .select('data')
+    .eq('id', APP_STATE_ID)
+    .maybeSingle();
+  if (error) {
+    console.error('[H-채팅] Supabase 조회 오류:', error.message);
+    return null;
+  }
+  if (!data || data.data == null || typeof data.data !== 'object') return null;
+  return data.data;
+}
+
+async function saveSharedToSupabase() {
+  let payload;
   try {
-    const raw = fs.readFileSync(DATA_FILE, 'utf8');
-    const j = JSON.parse(raw);
-    shared = { ...emptyShared(), ...j };
-    if (!Array.isArray(shared.accounts)) shared.accounts = [];
+    payload = JSON.parse(JSON.stringify(shared));
   } catch (e) {
-    console.error('[companychat] shared-state.json 손상, 빈 DB로 복구합니다.', e.message);
-    shared = { ...emptyShared(), accounts: [] };
+    console.error('[H-채팅] 상태 직렬화 실패:', e.message);
+    return;
+  }
+  const { error } = await supabase.from(APP_STATE_TABLE).upsert(
+    {
+      id: APP_STATE_ID,
+      data: payload,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: 'id' }
+  );
+  if (error) throw new Error(error.message);
+}
+
+async function flushPersistToStorage() {
+  if (useSupabase()) {
+    await saveSharedToSupabase();
+  } else {
     saveSharedToDisk(shared);
   }
 }
 
-if (!Array.isArray(shared.accounts) || shared.accounts.length === 0) {
-  console.warn('[companychat] 계정 목록이 비어 있어 데모 계정을 채웁니다.');
-  shared.accounts = seedDemoAccounts();
-  saveSharedToDisk(shared);
-}
-
-/** 예전 기본값(false)으로 면접원 채팅만 막혀 있던 일반 단체방을 한 번 열어 준다(전체 공지방 제외). */
-function migrateInterviewerChatRoomDefault() {
-  if (shared.__ivChatGeneralDefaultFix) return;
-  if (Array.isArray(shared.rooms)) {
-    for (const r of shared.rooms) {
-      if (r.type === 'group' && !r.isAnnounceFeed && r.interviewerChatAllowed === false) {
-        r.interviewerChatAllowed = true;
-      }
-    }
-  }
-  shared.__ivChatGeneralDefaultFix = true;
-  saveSharedToDisk(shared);
-}
-migrateInterviewerChatRoomDefault();
-
-let saveTimer = null;
 function schedulePersist() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
-    try {
-      saveSharedToDisk(shared);
-    } catch (e) {
-      console.error('저장 실패', e.message);
-    }
+    flushPersistToStorage().catch((e) => console.error('[H-채팅] 저장 실패', e.message));
   }, 120);
 }
 
-/** 방 단위로 메시지 배열을 id 기준 병합 — 한 클라이언트의 오래된 payload 가 전체 messages 를 덮어 최신 글을 지우는 것을 막음 */
 function mergeMessageMaps(serverMsgs, clientMsgs) {
   const base = serverMsgs && typeof serverMsgs === 'object' ? serverMsgs : {};
   if (!clientMsgs || typeof clientMsgs !== 'object') return base;
@@ -174,6 +186,78 @@ function mergeSharedUpdate(payload) {
   };
 }
 
+function migrateInterviewerChatRoomDefault() {
+  if (shared.__ivChatGeneralDefaultFix) return;
+  if (Array.isArray(shared.rooms)) {
+    for (const r of shared.rooms) {
+      if (r.type === 'group' && !r.isAnnounceFeed && r.interviewerChatAllowed === false) {
+        r.interviewerChatAllowed = true;
+      }
+    }
+  }
+  shared.__ivChatGeneralDefaultFix = true;
+}
+
+function ensureAccountsNonEmpty() {
+  if (!Array.isArray(shared.accounts) || shared.accounts.length === 0) {
+    console.warn('[H-채팅] 계정 목록이 비어 있어 데모 계정을 채웁니다.');
+    shared.accounts = seedDemoAccounts();
+  }
+}
+
+function initFromFile() {
+  const dataFileExists = fs.existsSync(DATA_FILE);
+  if (!dataFileExists) {
+    shared = { ...emptyShared(), accounts: seedDemoAccounts() };
+    saveSharedToDisk(shared);
+    return;
+  }
+  try {
+    const raw = fs.readFileSync(DATA_FILE, 'utf8');
+    const j = JSON.parse(raw);
+    shared = { ...emptyShared(), ...j };
+    if (!Array.isArray(shared.accounts)) shared.accounts = [];
+  } catch (e) {
+    console.error('[H-채팅] shared-state.json 손상, 빈 DB로 복구합니다.', e.message);
+    shared = { ...emptyShared(), accounts: [] };
+    saveSharedToDisk(shared);
+  }
+  ensureAccountsNonEmpty();
+  saveSharedToDisk(shared);
+}
+
+async function initFromSupabase() {
+  supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  let row = await loadSharedFromSupabase();
+
+  if (!row && fs.existsSync(DATA_FILE)) {
+    try {
+      const raw = fs.readFileSync(DATA_FILE, 'utf8');
+      const j = JSON.parse(raw);
+      const migrated = { ...emptyShared(), ...j };
+      if (!Array.isArray(migrated.accounts)) migrated.accounts = [];
+      if (!migrated.accounts.length) migrated.accounts = seedDemoAccounts();
+      shared = migrated;
+      await saveSharedToSupabase();
+      console.log('[H-채팅] 로컬 shared-state.json 을 Supabase 로 복사했습니다.');
+      row = await loadSharedFromSupabase();
+    } catch (e) {
+      console.warn('[H-채팅] 로컬 파일 → Supabase 이전 실패:', e.message);
+    }
+  }
+
+  if (!row) {
+    shared = { ...emptyShared(), accounts: seedDemoAccounts() };
+    return;
+  }
+
+  shared = { ...emptyShared(), ...row };
+  if (!Array.isArray(shared.accounts)) shared.accounts = [];
+  ensureAccountsNonEmpty();
+}
+
 function localIPv4s() {
   const out = [];
   for (const addrs of Object.values(networkInterfaces())) {
@@ -186,14 +270,9 @@ function localIPv4s() {
 }
 
 function normalizePublicBaseUrl(raw) {
-  const s = String(raw || '').trim().replace(/\/+$/, '');
-  return s;
+  return String(raw || '').trim().replace(/\/+$/, '');
 }
 
-/**
- * 인터넷에서 접속하는 공개 주소 (고정 도메인·배포 URL)
- * 우선순위: PUBLIC_BASE_URL(커스텀 도메인) → Render/Railway/Fly 자동 변수 → 로컬 저장 파일
- */
 function getPublicBaseUrl() {
   const envPub = process.env.PUBLIC_BASE_URL && String(process.env.PUBLIC_BASE_URL).trim();
   if (envPub) return normalizePublicBaseUrl(envPub);
@@ -232,10 +311,13 @@ const io = new Server(server, {
 });
 
 app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, clients: io.engine.clientsCount });
+  res.json({
+    ok: true,
+    clients: io.engine.clientsCount,
+    storage: useSupabase() ? 'supabase' : 'file',
+  });
 });
 
-/** 같은 Wi-Fi의 휴대폰·다른 PC 접속용 (로그인 화면에서 표시) */
 app.get('/api/lan-urls', (_req, res) => {
   const urls = localIPv4s().map((ip) => `http://${ip}:${PORT}/`);
   const pub = getPublicBaseUrl();
@@ -244,7 +326,6 @@ app.get('/api/lan-urls', (_req, res) => {
 
 app.use(express.json({ limit: '4kb' }));
 
-/** 공개(터널) 주소 저장 — 반드시 서버 PC에서 http://127.0.0.1 로 열었을 때만 허용 */
 app.post('/api/admin/public-url', (req, res) => {
   if (!isLocalAdminRequest(req)) {
     return res.status(403).json({ ok: false, error: '이 PC의 127.0.0.1 로 접속한 브라우저에서만 저장할 수 있습니다.' });
@@ -276,22 +357,37 @@ io.on('connection', (socket) => {
   });
 });
 
-server.listen(PORT, HOST, () => {
-  const ips = localIPv4s();
-  console.log('');
-  console.log('회사채팅 — 실시간 서버 (Socket.IO)');
-  console.log(`  이 PC에서   http://127.0.0.1:${PORT}/`);
-  ips.forEach((ip) => console.log(`  같은 네트워크 http://${ip}:${PORT}/`));
-  console.log(`  상태 파일     ${DATA_FILE}`);
-  console.log('  (휴대폰 등에서 안 열리면 Windows 방화벽에서 이 포트/Node 허용)');
-  const pub = getPublicBaseUrl();
-  if (pub)
+async function bootstrap() {
+  if (useSupabase()) {
+    console.log('[H-채팅] 저장소: Supabase (Postgres JSONB)');
+    await initFromSupabase();
+  } else {
+    console.log('[H-채팅] 저장소: 로컬 파일', DATA_FILE);
+    initFromFile();
+  }
+
+  migrateInterviewerChatRoomDefault();
+  ensureAccountsNonEmpty();
+  await flushPersistToStorage();
+
+  server.listen(PORT, HOST, () => {
+    const ips = localIPv4s();
+    console.log('');
+    console.log('H-채팅 — 실시간 서버 (Socket.IO)');
+    console.log(`  이 PC에서   http://127.0.0.1:${PORT}/`);
+    ips.forEach((ip) => console.log(`  같은 네트워크 http://${ip}:${PORT}/`));
     console.log(
-      `  인터넷(고정·배포) ${pub}/  — Render·Fly·Railway 배포 시 자동, 커스텀 도메인은 PUBLIC_BASE_URL`
+      useSupabase() ? `  앱 상태 DB     Supabase (${APP_STATE_TABLE})` : `  상태 파일     ${DATA_FILE}`
     );
-  else
-    console.log(
-      '  인터넷 공개 주소  Render/Fly 배포(저장소 루트 render.yaml 참고) 또는 npm run tunnel + 로그인 화면 저장'
-    );
-  console.log('');
+    console.log('  (휴대폰 등에서 안 열리면 Windows 방화벽에서 이 포트/Node 허용)');
+    const pub = getPublicBaseUrl();
+    if (pub) console.log(`  인터넷(고정·배포) ${pub}/`);
+    else console.log('  인터넷 공개 주소  PUBLIC_BASE_URL 또는 Render 배포 URL');
+    console.log('');
+  });
+}
+
+bootstrap().catch((e) => {
+  console.error('[H-채팅] 시작 실패:', e);
+  process.exit(1);
 });
