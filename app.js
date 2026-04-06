@@ -548,19 +548,6 @@
     return h === '127.0.0.1' || h === 'localhost' || h === '[::1]';
   }
 
-  function buildInternetAccessBannerHtml() {
-    if (!publicUrlFromServer) return '';
-    if (window.location.protocol !== 'http:' && window.location.protocol !== 'https:') return '';
-    const u = `${publicUrlFromServer.replace(/\/+$/, '')}/`;
-    const enc = encodeURIComponent(u);
-    const vis = escapeHtml(u);
-    return `<div class="lan-access-banner lan-access-banner--internet">
-      <p class="lan-access-title">인터넷 공개 주소 (다른 Wi-Fi·LTE·전 세계)</p>
-      <p class="lan-access-row"><code>${vis}</code> <button type="button" class="btn btn-ghost btn-lan-copy" data-copy-lan="${enc}">복사</button></p>
-      <p class="hint"><strong>Render / Fly / Railway</strong>에 올리면 이 주소가 배포마다 유지되는 고정 호스트입니다. 직접 산 도메인을 썼다면 서버 환경변수 <code>PUBLIC_BASE_URL</code>에 넣은 주소가 여기 표시됩니다. 임시 터널(localtunnel)만 쓰는 경우에만 주소가 자주 바뀔 수 있습니다.</p>
-    </div>`;
-  }
-
   function buildLanOnlyBannerHtml() {
     if (window.location.protocol !== 'http:' && window.location.protocol !== 'https:') return '';
     const portHint = window.location.port || DEFAULT_SOCKET_PORT;
@@ -595,7 +582,7 @@
   }
 
   function buildLanAccessBannerHtml() {
-    return buildInternetAccessBannerHtml() + buildLanOnlyBannerHtml();
+    return buildLanOnlyBannerHtml();
   }
 
   /** 터널 URL 저장 — 서버 PC에서 127.0.0.1 로 접속했을 때만 표시 */
@@ -2199,7 +2186,7 @@
           <div class="field">
             <label for="newchat-search">이름·아이디 검색</label>
             <input type="search" id="newchat-search" placeholder="이름 또는 @아이디" autocomplete="off" />
-            <p class="caption" style="margin-top:0.35rem">1:1 상대 목록과 단체 멤버 목록이 함께 필터됩니다. 체크·선택은 그대로 가능합니다.</p>
+            <p class="caption" style="margin-top:0.35rem">검색은 단체방 멤버 목록과 함께 적용됩니다. 1:1 상대가 <strong>한 명만</strong> 남으면 아래 목록에서 자동 선택됩니다. 같은 상태에서 <strong>Enter</strong>를 누르면 바로 1:1 방이 열립니다.</p>
           </div>
           <div class="field">
             <label for="dm-select">1:1 대화 — 상대 선택</label>
@@ -2253,9 +2240,13 @@
         const u = others.find((x) => x.id === opt.value);
         opt.hidden = !!(u && !accountMatchesSearch(u, q));
       });
-      if (dmSelect.value) {
-        const o = dmSelect.options[dmSelect.selectedIndex];
-        if (o && o.hidden) dmSelect.value = '';
+      const visibleDmOpts = Array.from(dmSelect.options).filter((opt, idx) => idx > 0 && opt.value && !opt.hidden);
+      if (visibleDmOpts.length === 1) {
+        dmSelect.value = visibleDmOpts[0].value;
+      } else {
+        const cur = dmSelect.value;
+        const curStill = visibleDmOpts.some((o) => o.value === cur);
+        if (!curStill) dmSelect.value = '';
       }
       overlay.querySelectorAll('#grp-members .newchat-mem-label').forEach((lab) => {
         const id = lab.getAttribute('data-mem-id');
@@ -2271,6 +2262,14 @@
     }
     searchIn.addEventListener('input', applyNewChatSearchFilter);
     searchIn.addEventListener('search', applyNewChatSearchFilter);
+    searchIn.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      applyNewChatSearchFilter();
+      const sid = dmSelect.value;
+      if (!sid) return;
+      overlay.querySelector('#btn-dm').click();
+    });
 
     function close() {
       overlay.remove();
