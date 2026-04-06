@@ -735,6 +735,7 @@
       }
       realtimeSocket.on('shared:state', (payload) => {
         const hadMe = !!state.me;
+        const composerSnap = snapshotChatComposerIfAny();
         applySharedPayload(payload);
         realtimeSyncedFromServer = true;
         realtimeConnectError = '';
@@ -745,6 +746,7 @@
             patchLoginSocketUiOnly();
           } else {
             render();
+            restoreChatComposerIfAny(composerSnap);
           }
         } catch (_) {
           /* render 아직 정의 전일 수 있음 — 무시 */
@@ -1278,6 +1280,40 @@
   /** 소켓 disconnect/connect_error/connect 마다 render() 하면 채팅 DOM이 통째로 갈리며 입력창·포커스가 끊김 (Render 등에서 끊김이 잦을 때 치명적) */
   function shouldSkipSocketDrivenRender() {
     return !!(state.me && view.screen === 'chat');
+  }
+
+  /** shared:state 마다 render() 하면 타 사용자·탭 동기화 시 입력 중 내용·포커스가 사라짐 */
+  function snapshotChatComposerIfAny() {
+    if (view.screen !== 'chat') return null;
+    try {
+      const ta = document.getElementById('msg-input');
+      if (!ta || ta.disabled) return null;
+      return {
+        value: ta.value,
+        focus: document.activeElement === ta,
+        start: typeof ta.selectionStart === 'number' ? ta.selectionStart : null,
+        end: typeof ta.selectionEnd === 'number' ? ta.selectionEnd : null,
+      };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function restoreChatComposerIfAny(snap) {
+    if (!snap) return;
+    requestAnimationFrame(() => {
+      try {
+        const ta = document.getElementById('msg-input');
+        if (!ta || ta.disabled) return;
+        ta.value = snap.value;
+        if (snap.start != null && snap.end != null) {
+          try {
+            ta.setSelectionRange(snap.start, snap.end);
+          } catch (_) {}
+        }
+        if (snap.focus) ta.focus();
+      } catch (_) {}
+    });
   }
 
   function patchLoginSocketUiOnly() {
