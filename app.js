@@ -1228,6 +1228,61 @@
     setTimeout(() => t.remove(), 3200);
   }
 
+  function devBulkImageExtFromDataUrl(dataUrl) {
+    const m = String(dataUrl || '').match(/^data:image\/(\w+);/i);
+    if (!m) return 'jpg';
+    const t = m[1].toLowerCase();
+    return t === 'jpeg' ? 'jpg' : t;
+  }
+
+  function devBulkPreviewSlotHtml(ivId, displayName, dataUrl) {
+    return (
+      '<div class="devbulk-preview">' +
+      '<img src="' +
+      escapeDataUrlForAttr(dataUrl) +
+      '" alt="" />' +
+      '<div class="devbulk-preview-actions">' +
+      '<button type="button" class="btn btn-ghost devbulk-img-download" data-devbulk-download="' +
+      escapeHtml(ivId) +
+      '" data-devbulk-dl-name="' +
+      escapeHtml(displayName || '') +
+      '">다운로드</button>' +
+      '<button type="button" class="btn btn-ghost devbulk-img-clear" data-devbulk-clear="' +
+      escapeHtml(ivId) +
+      '">사진 지우기</button>' +
+      '</div></div>'
+    );
+  }
+
+  /** data URL 이미지를 파일로 저장 (브라우저 다운로드). 채팅·개발자 일괄 전송 등 공통. */
+  function downloadImageDataUrlAsFile(dataUrl, filenameStemNoExt) {
+    if (!dataUrl || !String(dataUrl).startsWith('data:image/')) {
+      showToast('저장할 사진이 없습니다.');
+      return;
+    }
+    const stem =
+      String(filenameStemNoExt || 'image')
+        .replace(/[\\/:*?"<>|]/g, '_')
+        .trim()
+        .slice(0, 100) || 'image';
+    const ext = devBulkImageExtFromDataUrl(dataUrl);
+    const a = document.createElement('a');
+    a.href = dataUrl;
+    a.download = `${stem}.${ext}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
+  function triggerDevBulkImageDownload(ivId, dataUrl, displayName) {
+    const safe =
+      String(displayName || '면접원')
+        .replace(/[\\/:*?"<>|]/g, '_')
+        .trim()
+        .slice(0, 80) || 'image';
+    downloadImageDataUrlAsFile(dataUrl, `${safe}-첨부`);
+  }
+
   function notify(title, body, tag) {
     if (!('Notification' in window) || Notification.permission !== 'granted') return;
     try {
@@ -1947,17 +2002,12 @@
     const rowHtml = (u) => {
       const teamCap = u.team && TEAMS[u.team] ? TEAMS[u.team] : '팀 미지정';
       const pend = devBulkPendingImageByIvId[u.id];
-      const previewInner = pend
-        ? `<div class="devbulk-preview">
-            <img src="${escapeDataUrlForAttr(pend)}" alt="" />
-            <button type="button" class="btn btn-ghost devbulk-img-clear" data-devbulk-clear="${escapeHtml(u.id)}">사진 지우기</button>
-          </div>`
-        : '';
+      const previewInner = pend ? devBulkPreviewSlotHtml(u.id, u.name, pend) : '';
       return `<tr class="devbulk-row" data-devbulk-user="${escapeHtml(u.id)}">
         <td class="devbulk-cell-name">
           <button type="button" class="btn btn-ghost devbulk-row-remove" data-devbulk-remove="${escapeHtml(
             u.id
-          )}" title="작업 목록에서 빼기">목록 제거</button>
+          )}" title="이 면접원만 작업 표에서 빼기">이 사람만 빼기</button>
           <div class="devbulk-name">${escapeHtml(u.name)}</div>
           <div class="devbulk-cell-team caption">${escapeHtml(teamCap)}</div>
         </td>
@@ -2337,10 +2387,9 @@
             }
             devBulkPendingImageByIvId[ivId] = dataUrl;
             if (slot) {
-              slot.innerHTML = `<div class="devbulk-preview">
-                <img src="${escapeDataUrlForAttr(dataUrl)}" alt="" />
-                <button type="button" class="btn btn-ghost devbulk-img-clear" data-devbulk-clear="${escapeHtml(ivId)}">사진 지우기</button>
-              </div>`;
+              const nmEl = row.querySelector('.devbulk-name');
+              const nm = nmEl ? String(nmEl.textContent || '').trim() : '';
+              slot.innerHTML = devBulkPreviewSlotHtml(ivId, nm, dataUrl);
             }
             if (hint) hint.textContent = '';
           };
@@ -2370,12 +2419,23 @@
           const rm = ev.target.closest('.devbulk-row-remove');
           if (rm) {
             ev.preventDefault();
+            ev.stopPropagation();
             const rid = rm.getAttribute('data-devbulk-remove');
             if (!rid) return;
             view.devBulkSelectedIds = view.devBulkSelectedIds.filter((x) => x !== rid);
             delete devBulkPendingImageByIvId[rid];
             render();
             requestAnimationFrame(() => devBulkRefreshSearchResults());
+            return;
+          }
+          const dl = ev.target.closest('.devbulk-img-download');
+          if (dl) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            const did = dl.getAttribute('data-devbulk-download');
+            if (!did) return;
+            const nm = dl.getAttribute('data-devbulk-dl-name') || '';
+            triggerDevBulkImageDownload(did, devBulkPendingImageByIvId[did], nm);
             return;
           }
           const btn = ev.target.closest('.devbulk-img-clear');
@@ -3533,7 +3593,7 @@
             : '';
         const imgHtml =
           m.image && String(m.image).startsWith('data:image/')
-            ? `<img class="chat-img" src="${escapeDataUrlForAttr(m.image)}" alt="" />`
+            ? `<img class="chat-img" src="${escapeDataUrlForAttr(m.image)}" alt="" title="사진을 누르면 기기에 저장됩니다" />`
             : '';
         const videoHtml =
           m.video && String(m.video).startsWith('data:video/')
@@ -3735,6 +3795,17 @@
 
     const list = document.getElementById('msg-list');
     if (list) list.scrollTop = list.scrollHeight;
+
+    list?.addEventListener('click', (ev) => {
+      const img = ev.target.closest('img.chat-img');
+      if (!img) return;
+      const src = img.getAttribute('src') || '';
+      if (!src.startsWith('data:image/')) return;
+      ev.preventDefault();
+      const room = state.rooms.find((r) => r.id === view.roomId);
+      const roomBit = room ? roomDisplayTitlePlain(room) : '채팅';
+      downloadImageDataUrlAsFile(src, `채팅-${roomBit}-${Date.now()}`);
+    });
 
     document.getElementById('chat-back')?.addEventListener('click', () => {
       document.getElementById('video-call-overlay')?.remove();

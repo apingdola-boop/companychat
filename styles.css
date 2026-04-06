@@ -1406,6 +1406,7 @@ h1 {
   max-width: 220px;
   border-radius: 10px;
   margin-top: 0.35rem;
+  cursor: pointer;
 }
 
 .bubble video.chat-video {
@@ -2162,7 +2163,15 @@ html[data-theme='light'] .devbulk-grid thead th {
   background: var(--surface2);
 }
 
-.devbulk-preview .devbulk-img-clear {
+.devbulk-preview-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.5rem;
+}
+
+.devbulk-preview .devbulk-img-clear,
+.devbulk-preview .devbulk-img-download {
   padding: 0.2rem 0.45rem;
   font-size: 0.72rem;
 }
