@@ -110,6 +110,15 @@
 
   function normalizeRoomModeration(room) {
     if (!room) return;
+    /** 실시간 동기화·구버전 데이터에서 type 누락 시 2인 방은 1:1(dm)으로 간주 (면접원 단체방 잠금 오동작 방지) */
+    if (
+      !room.type &&
+      Array.isArray(room.memberIds) &&
+      room.memberIds.length === 2 &&
+      !room.isAnnounceFeed
+    ) {
+      room.type = 'dm';
+    }
     if (room.type === 'group' && typeof room.interviewerChatAllowed !== 'boolean') {
       room.interviewerChatAllowed = !room.isAnnounceFeed;
     }
@@ -3158,6 +3167,7 @@
 
     function send() {
       const ta = document.getElementById('msg-input');
+      if (!ta) return;
       const text = (ta.value || '').trim();
       if (!text && !pendingImage) return;
       const room = state.rooms.find((r) => r.id === view.roomId);
