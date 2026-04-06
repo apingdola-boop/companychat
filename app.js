@@ -446,20 +446,58 @@
     return s;
   }
 
+  /**
+   * Render 등 공개 https 로 열었는데 예전에 저장된 127.0.0.1/사설 IP 소켓 주소가 남아 있으면
+   * 연결이 계속 실패하고 connect마다 render()가 돌아 채팅 입력 DOM이 리셋되는 문제가 난다.
+   * 이 경우 저장값은 무시하고(로컬스토리지는 삭제) 현재 페이지 origin 으로만 붙인다.
+   */
+  function isLoopbackOrPrivateSocketHost(hostname) {
+    const h = String(hostname || '').toLowerCase();
+    if (!h) return false;
+    if (h === 'localhost' || h === '127.0.0.1' || h === '[::1]') return true;
+    if (/^192\.168\.\d{1,3}\.\d{1,3}$/.test(h)) return true;
+    if (/^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h)) return true;
+    if (/^172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}$/.test(h)) return true;
+    return false;
+  }
+
+  function shouldIgnoreSocketBaseForThisPage(normUrl) {
+    if (!normUrl || window.location.protocol !== 'https:' || isLoopbackHost()) return false;
+    try {
+      const u = new URL(normUrl);
+      return isLoopbackOrPrivateSocketHost(u.hostname);
+    } catch (_) {
+      return false;
+    }
+  }
+
   function getExplicitSocketBaseUrl() {
     try {
       const q =
         new URLSearchParams(window.location.search).get('socket') ||
         new URLSearchParams(window.location.search).get('chatSocket');
-      if (q && q.trim()) return normalizeSocketBaseUrl(q.trim());
+      if (q && q.trim()) {
+        const n = normalizeSocketBaseUrl(q.trim());
+        if (!shouldIgnoreSocketBaseForThisPage(n)) return n;
+      }
     } catch (_) {}
     try {
       const s = localStorage.getItem(LS_SOCKET_URL);
-      if (s && s.trim()) return normalizeSocketBaseUrl(s.trim());
+      if (s && s.trim()) {
+        const n = normalizeSocketBaseUrl(s.trim());
+        if (shouldIgnoreSocketBaseForThisPage(n)) {
+          try {
+            localStorage.removeItem(LS_SOCKET_URL);
+          } catch (_) {}
+        } else return n;
+      }
     } catch (_) {}
     const meta = document.querySelector('meta[name="company-chat-socket-url"]');
     const mc = meta && meta.getAttribute('content');
-    if (mc && String(mc).trim()) return normalizeSocketBaseUrl(String(mc).trim());
+    if (mc && String(mc).trim()) {
+      const n = normalizeSocketBaseUrl(String(mc).trim());
+      if (!shouldIgnoreSocketBaseForThisPage(n)) return n;
+    }
     return '';
   }
 
