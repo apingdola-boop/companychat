@@ -126,9 +126,11 @@
     if (typeof room.roomNoticeBody !== 'string') room.roomNoticeBody = '';
   }
 
-  /** 단체방만: 면접원은 연구원·슈퍼바이저가 허용하기 전까지 메시지·사진 전송 불가 */
+  /** 단체방만: 면접원은 연구원·슈퍼바이저가 허용하기 전까지 메시지·사진 전송 불가. 직원은 허용 토글과 무관하게 항상 전송 가능 */
   function interviewerChatSendBlocked(room) {
-    if (!state.me || state.me.role !== 'interviewer' || !room || room.type !== 'group') return false;
+    if (!state.me) return false;
+    if (isStaffAccountRole(state.me.role)) return false;
+    if (state.me.role !== 'interviewer' || !room || room.type !== 'group') return false;
     return !room.interviewerChatAllowed;
   }
 
