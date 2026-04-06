@@ -611,7 +611,7 @@
         <li>붙여 넣고 <strong>공개 주소 저장</strong></li>
       </ol>
       <div class="field">
-        <label>공개 접속 주소</label>
+        <label for="public-url-input">공개 접속 주소</label>
         <input type="url" id="public-url-input" placeholder="https://xxxx.loca.lt" value="${escapeHtml(
           publicUrlFromServer
         )}" autocomplete="off" />
@@ -1228,7 +1228,7 @@
         </ul>
         ${errBlock}
         <div class="field">
-          <label>소켓 서버 주소 (선택·이 브라우저에 저장)</label>
+          <label for="socket-url-input">소켓 서버 주소 (선택·이 브라우저에 저장)</label>
           <input type="text" id="socket-url-input" placeholder="http://127.0.0.1:8787" value="${escapeHtml(
             explicit
           )}" autocomplete="off" />
@@ -1256,11 +1256,11 @@
         ${buildPublicTunnelAdminHtml()}
         <div id="login-socket-panel-wrap">${buildLoginSocketPanelHtml()}</div>
         <div class="field">
-          <label>아이디</label>
+          <label for="login-id">아이디</label>
           <input type="text" id="login-id" placeholder="예: researcher1" autocomplete="username" />
         </div>
         <div class="field">
-          <label>비밀번호</label>
+          <label for="login-pw">비밀번호</label>
           <input type="password" id="login-pw" placeholder="비밀번호" autocomplete="current-password" />
         </div>
         <button type="button" class="btn btn-primary" id="btn-login">로그인</button>
@@ -1672,7 +1672,7 @@
       .join('');
     const replyBlock = showReplyForm
       ? `<div class="feedback-reply-compose">
-          <textarea class="fb-reply-text" rows="2" placeholder="답변을 입력…"></textarea>
+          <textarea class="fb-reply-text" rows="2" placeholder="답변을 입력…" aria-label="답변 입력"></textarea>
           <button type="button" class="btn btn-primary fb-reply-submit" data-thread-id="${escapeHtml(t.id)}">답변 등록</button>
         </div>`
       : '';
@@ -1710,11 +1710,11 @@
             <h2 class="feedback-heading">질문 · 의견 보내기</h2>
             <p class="caption">연구원·슈퍼바이저에게 전달됩니다. (이 기기에 저장되는 데모입니다.)</p>
             <div class="field">
-              <label>제목 <span class="caption">(선택)</span></label>
+              <label for="fb-title">제목 <span class="caption">(선택)</span></label>
               <input type="text" id="fb-title" maxlength="120" placeholder="예: 조사 일정 문의" autocomplete="off" />
             </div>
             <div class="field">
-              <label>내용</label>
+              <label for="fb-body">내용</label>
               <textarea id="fb-body" rows="4" placeholder="질문이나 의견을 적어 주세요."></textarea>
             </div>
             <button type="button" class="btn btn-primary" id="fb-submit">보내기</button>
@@ -2030,11 +2030,11 @@
         <div class="modal-head">공지 보내기</div>
         <div class="modal-body">
           <div class="field">
-            <label>제목</label>
+            <label for="ann-title">제목</label>
             <input type="text" id="ann-title" placeholder="예: 내일 스케줄 변경" />
           </div>
           <div class="field">
-            <label>내용</label>
+            <label for="ann-body">내용</label>
             <textarea id="ann-body" rows="4" style="width:100%;border-radius:12px;border:1px solid var(--border);background:var(--bg);padding:0.65rem" placeholder="상세 내용"></textarea>
           </div>
           <p class="hint">슈퍼바이저만 전체 공지를 올릴 수 있습니다. 카카오·문자 <strong>자동 발송</strong>은 백엔드·API가 있어야 가능합니다. 이 기기에서 브라우저 알림을 허용하면 공지 작성 직후 <strong>이 PC/폰</strong>에 뜨는 정도만 됩니다. 면접원에게 보내려면 「공유하기」로 카카오톡 등에 붙여 넣으세요.</p>
@@ -2094,11 +2094,11 @@
         <div class="modal-head">이 방 공지</div>
         <div class="modal-body">
           <div class="field">
-            <label>제목</label>
+            <label for="room-ann-title">제목</label>
             <input type="text" id="room-ann-title" placeholder="예: 오늘 일정" autocomplete="off" />
           </div>
           <div class="field">
-            <label>내용</label>
+            <label for="room-ann-body">내용</label>
             <textarea id="room-ann-body" rows="4" style="width:100%;border-radius:12px;border:1px solid var(--border);background:var(--bg);padding:0.65rem" placeholder="상세 내용"></textarea>
           </div>
           <p class="hint">연구원·슈퍼바이저만 수정할 수 있습니다. 제목·내용을 모두 비우면 상단 배너만 지웁니다. 상대 폰으로 자동 문자·알림톡은 서버 연동이 필요하며, 「공유하기」로 카카오톡 등에 넘길 수 있습니다.</p>
@@ -2224,12 +2224,12 @@
         <div class="modal-head">새 채팅</div>
         <div class="modal-body">
           <div class="field">
-            <label>이름·아이디 검색</label>
+            <label for="newchat-search">이름·아이디 검색</label>
             <input type="search" id="newchat-search" placeholder="이름 또는 @아이디" autocomplete="off" />
             <p class="caption" style="margin-top:0.35rem">1:1 상대 목록과 단체 멤버 목록이 함께 필터됩니다. 체크·선택은 그대로 가능합니다.</p>
           </div>
           <div class="field">
-            <label>1:1 대화 — 상대 선택</label>
+            <label for="dm-select">1:1 대화 — 상대 선택</label>
             <select id="dm-select" class="field" style="margin-top:0.35rem">
               <option value="">선택…</option>
               ${others
@@ -2246,17 +2246,19 @@
           </div>
           <hr style="border:none;border-top:1px solid var(--border);margin:1rem 0" />
           <div class="field">
-            <label>단체방 이름</label>
+            <label for="grp-name">단체방 이름</label>
             <input type="text" id="grp-name" placeholder="예: 4월 현장조사 TF" />
           </div>
           <div class="field">
-            <label>멤버 선택</label>
+            <fieldset style="border:none;margin:0;padding:0;min-width:0">
+            <legend style="font-size:0.8rem;color:var(--muted);margin-bottom:0.35rem;padding:0">멤버 선택</legend>
             <div class="newchat-member-scroll">
             <div class="check-list" id="grp-members">
               ${groupNewChatMembersChecklistHtml(others)}
             </div>
             </div>
             <button type="button" class="btn btn-grp-create" id="btn-grp">단체방 만들기</button>
+            </fieldset>
           </div>
         </div>
         <div class="modal-actions">
@@ -2362,19 +2364,19 @@
         <div class="modal-head">계정 추가</div>
         <div class="modal-body">
           <div class="field">
-            <label>아이디 (로그인용)</label>
+            <label for="acc-loginId">아이디 (로그인용)</label>
             <input type="text" id="acc-loginId" autocomplete="off" placeholder="영문·숫자 권장" />
           </div>
           <div class="field">
-            <label>비밀번호</label>
+            <label for="acc-pw">비밀번호</label>
             <input type="password" id="acc-pw" autocomplete="new-password" />
           </div>
           <div class="field">
-            <label>이름 (채팅에 표시)</label>
+            <label for="acc-name">이름 (채팅에 표시)</label>
             <input type="text" id="acc-name" maxlength="30" />
           </div>
           <div class="field">
-            <label>역할 (연구원·슈퍼바이저·면접원)</label>
+            <label for="acc-role">역할 (연구원·슈퍼바이저·면접원)</label>
             <select id="acc-role">
               <option value="researcher">연구원</option>
               <option value="supervisor">슈퍼바이저</option>
@@ -2382,7 +2384,7 @@
             </select>
           </div>
           <div class="field hidden" id="acc-team-wrap">
-            <label>소속 팀 (면접원 필수)</label>
+            <label for="acc-team">소속 팀 (면접원 필수)</label>
             <select id="acc-team">
               <option value="">팀을 선택하세요</option>
               ${TEAM_ORDER.map((k) => `<option value="${k}">${TEAMS[k]}</option>`).join('')}
@@ -2629,11 +2631,11 @@
         <div class="modal-head">비밀번호 변경</div>
         <div class="modal-body">
           <div class="field">
-            <label>새 비밀번호</label>
+            <label for="acc-new-pw">새 비밀번호</label>
             <input type="password" id="acc-new-pw" autocomplete="new-password" />
           </div>
           <div class="field">
-            <label>새 비밀번호 확인</label>
+            <label for="acc-new-pw2">새 비밀번호 확인</label>
             <input type="password" id="acc-new-pw2" autocomplete="new-password" />
           </div>
         </div>
@@ -2687,7 +2689,7 @@
         <div class="modal-head">면접원 소속 팀</div>
         <div class="modal-body">
           <div class="field">
-            <label>팀</label>
+            <label for="acc-edit-team">팀</label>
             <select id="acc-edit-team">
               <option value="">선택하세요</option>
               ${TEAM_ORDER.map(
@@ -2900,7 +2902,7 @@
         <div class="modal-head">멤버 초대</div>
         <div class="modal-body">
           <div class="field">
-            <label>이름·아이디 검색</label>
+            <label for="invite-search">이름·아이디 검색</label>
             <input type="search" id="invite-search" placeholder="검색…" autocomplete="off" />
           </div>
           <p class="caption">초대할 사람을 선택하세요. (이미 방에 있는 사람은 목록에 없습니다.)</p>
@@ -3046,14 +3048,14 @@
     /* iOS: disabled textarea는 포커스·키보드가 안 뜨는 경우가 많아, 막힌 경우에는 안내 버튼만 둠 */
     const msgField = ivBlocked
       ? `<button type="button" class="msg-input-placeholder" id="msg-input-blocked-hint" aria-label="면접원 채팅 안내">면접원 채팅이 아직 허용되지 않았습니다. 탭하여 안내를 확인하세요.</button>`
-      : `<textarea id="msg-input" rows="1" placeholder="메시지 입력…" autocomplete="off" autocorrect="on" autocapitalize="sentences" inputmode="text" enterkeyhint="send"></textarea>`;
+      : `<textarea id="msg-input" rows="1" placeholder="메시지 입력…" aria-label="메시지 입력" autocomplete="off" autocorrect="on" autocapitalize="sentences" inputmode="text" enterkeyhint="send"></textarea>`;
     const inputBar = `
         <div class="chat-composer-fixed" role="region" aria-label="메시지 입력">
         ${lockHint}
         <div class="${inputBarClass}">
           <label class="attach" title="사진">
             <span>🖼</span>
-            <input type="file" id="file-img" accept="image/*"${ivBlocked ? ' disabled' : ''} />
+            <input type="file" id="file-img" accept="image/*" aria-label="사진 첨부"${ivBlocked ? ' disabled' : ''} />
           </label>
           ${msgField}
           <button type="button" class="send" id="btn-send"${ivBlocked ? ' disabled' : ''}>전송</button>
