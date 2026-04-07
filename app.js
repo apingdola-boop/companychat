@@ -669,6 +669,7 @@
       chatNotifyMutedRoomsByUser: {},
       staffPresenceByUser: {},
       trafficExpenseSubmittedByIvId: {},
+      trafficExpenseSubmittedByIvProjectKey: {},
     };
   }
 
@@ -717,6 +718,12 @@
         typeof data.trafficExpenseSubmittedByIvId === 'object' &&
         !Array.isArray(data.trafficExpenseSubmittedByIvId)
           ? data.trafficExpenseSubmittedByIvId
+          : {},
+      trafficExpenseSubmittedByIvProjectKey:
+        data.trafficExpenseSubmittedByIvProjectKey &&
+        typeof data.trafficExpenseSubmittedByIvProjectKey === 'object' &&
+        !Array.isArray(data.trafficExpenseSubmittedByIvProjectKey)
+          ? data.trafficExpenseSubmittedByIvProjectKey
           : {},
       _migrateV1: fromV1 || (!!data.directory && !data.accounts),
     };
@@ -963,6 +970,7 @@
       chatNotifyMutedRoomsByUser: state.chatNotifyMutedRoomsByUser || {},
       staffPresenceByUser: state.staffPresenceByUser || {},
       trafficExpenseSubmittedByIvId: state.trafficExpenseSubmittedByIvId || {},
+      trafficExpenseSubmittedByIvProjectKey: state.trafficExpenseSubmittedByIvProjectKey || {},
     };
   }
 
@@ -1008,6 +1016,17 @@
       );
     } else if (!state.trafficExpenseSubmittedByIvId) {
       state.trafficExpenseSubmittedByIvId = {};
+    }
+    if (payload.trafficExpenseSubmittedByIvProjectKey && typeof payload.trafficExpenseSubmittedByIvProjectKey === 'object') {
+      if (!state.trafficExpenseSubmittedByIvProjectKey || typeof state.trafficExpenseSubmittedByIvProjectKey !== 'object')
+        state.trafficExpenseSubmittedByIvProjectKey = {};
+      for (const ivId of Object.keys(payload.trafficExpenseSubmittedByIvProjectKey)) {
+        const cur = state.trafficExpenseSubmittedByIvProjectKey[ivId];
+        const inc = payload.trafficExpenseSubmittedByIvProjectKey[ivId];
+        state.trafficExpenseSubmittedByIvProjectKey[ivId] = mergeTrafficExpenseMaps(cur, inc);
+      }
+    } else if (!state.trafficExpenseSubmittedByIvProjectKey) {
+      state.trafficExpenseSubmittedByIvProjectKey = {};
     }
     syncSessionMeWithAccounts();
   }
@@ -1130,6 +1149,7 @@
         chatNotifyMutedRoomsByUser: state.chatNotifyMutedRoomsByUser || {},
         staffPresenceByUser: state.staffPresenceByUser || {},
         trafficExpenseSubmittedByIvId: state.trafficExpenseSubmittedByIvId || {},
+        trafficExpenseSubmittedByIvProjectKey: state.trafficExpenseSubmittedByIvProjectKey || {},
       };
       localStorage.setItem(STORAGE_V2, JSON.stringify(persist));
       if (localStorage.getItem(STORAGE_V1)) localStorage.removeItem(STORAGE_V1);
@@ -2166,6 +2186,65 @@
     return true;
   }
 
+  function guessProjectKeyForTrafficPayload(p) {
+    const pn = p && p.projectNumber != null ? String(p.projectNumber).trim() : '';
+    const pname = p && p.projectName != null ? String(p.projectName).trim() : '';
+    if (pname) {
+      const room = state.rooms.find((r) => r && r.type === 'group' && String(r.name || '').trim() === pname);
+      if (room && room.id) return String(room.id);
+    }
+    if (pn) {
+      const room = state.rooms.find(
+        (r) => r && r.type === 'group' && String(r.name || '').includes(pn)
+      );
+      if (room && room.id) return String(room.id);
+    }
+    if (pname) return 'name:' + pname;
+    if (pn) return 'num:' + pn;
+    return '';
+  }
+
+  function markTrafficExpenseSubmittedForIvProjectKey(ivAccountId, projectKey, opts) {
+    const id = String(ivAccountId || '').trim();
+    const pk = String(projectKey || '').trim();
+    if (!id || !pk) return false;
+    const acc = state.accounts.find((a) => a.id === id && a.role === 'interviewer');
+    if (!acc) return false;
+    if (!state.trafficExpenseSubmittedByIvProjectKey || typeof state.trafficExpenseSubmittedByIvProjectKey !== 'object')
+      state.trafficExpenseSubmittedByIvProjectKey = {};
+    if (!state.trafficExpenseSubmittedByIvProjectKey[id] || typeof state.trafficExpenseSubmittedByIvProjectKey[id] !== 'object')
+      state.trafficExpenseSubmittedByIvProjectKey[id] = {};
+    const record = {
+      at: opts && typeof opts.at === 'number' && Number.isFinite(opts.at) ? opts.at : Date.now(),
+      manual: !!(opts && opts.manual),
+      source: (opts && opts.source) || 'manual',
+    };
+    if (opts && opts.cleared) record.cleared = true;
+    if (opts && opts.files) record.files = opts.files;
+    if (opts && opts.summary) record.summary = opts.summary;
+    state.trafficExpenseSubmittedByIvProjectKey[id][pk] = record;
+    return true;
+  }
+
+  function markTrafficExpenseClearedForIvProjectKey(ivAccountId, projectKey, opts) {
+    const id = String(ivAccountId || '').trim();
+    const pk = String(projectKey || '').trim();
+    if (!id || !pk) return false;
+    const acc = state.accounts.find((a) => a.id === id && a.role === 'interviewer');
+    if (!acc) return false;
+    if (!state.trafficExpenseSubmittedByIvProjectKey || typeof state.trafficExpenseSubmittedByIvProjectKey !== 'object')
+      state.trafficExpenseSubmittedByIvProjectKey = {};
+    if (!state.trafficExpenseSubmittedByIvProjectKey[id] || typeof state.trafficExpenseSubmittedByIvProjectKey[id] !== 'object')
+      state.trafficExpenseSubmittedByIvProjectKey[id] = {};
+    state.trafficExpenseSubmittedByIvProjectKey[id][pk] = {
+      at: Date.now(),
+      cleared: true,
+      manual: true,
+      source: (opts && opts.source) || 'manual-clear',
+    };
+    return true;
+  }
+
   function markTrafficExpenseClearedForIv(ivAccountId, opts) {
     const id = String(ivAccountId || '').trim();
     if (!id) return false;
@@ -2227,7 +2306,12 @@
       files: data.files || null,
       summary: data.summary || null,
     };
-    if (markTrafficExpenseSubmittedForIv(acc.id, { ...opts, manual: false })) {
+    const projectKey = guessProjectKeyForTrafficPayload(data);
+    const okProject = projectKey
+      ? markTrafficExpenseSubmittedForIvProjectKey(acc.id, projectKey, { ...opts, manual: false })
+      : false;
+    if (!projectKey) markTrafficExpenseSubmittedForIv(acc.id, { ...opts, manual: false });
+    if (okProject || projectKey === '') {
       saveState();
       showToast('교통비 제출로 기록했습니다: ' + acc.name + ' (@' + acc.loginId + ')');
       if (view.screen === 'main' && view.tab === 'traffic') render();
@@ -2334,7 +2418,12 @@
         summary: p.summary || null,
         at: at || undefined,
       };
-      if (markTrafficExpenseSubmittedForIv(acc.id, { ...opts, manual: false })) changed = true;
+      const projectKey = guessProjectKeyForTrafficPayload(p);
+      if (projectKey) {
+        if (markTrafficExpenseSubmittedForIvProjectKey(acc.id, projectKey, { ...opts, manual: false })) changed = true;
+      } else {
+        if (markTrafficExpenseSubmittedForIv(acc.id, { ...opts, manual: false })) changed = true;
+      }
       rememberTrafficBridgeRowId(row.id);
     }
     if (changed) {
@@ -2358,9 +2447,13 @@
   function trafficToolTabHTML(me) {
     const u = TRAFFIC_TOOL_URL;
     const esc = escapeHtml(u);
-    const subs =
+    const subsFlat =
       state.trafficExpenseSubmittedByIvId && typeof state.trafficExpenseSubmittedByIvId === 'object'
         ? state.trafficExpenseSubmittedByIvId
+        : {};
+    const subsByProj =
+      state.trafficExpenseSubmittedByIvProjectKey && typeof state.trafficExpenseSubmittedByIvProjectKey === 'object'
+        ? state.trafficExpenseSubmittedByIvProjectKey
         : {};
     if (!view.trafficListFilter || typeof view.trafficListFilter !== 'object')
       view.trafficListFilter = { q: '', team: '', roomId: '', ym: '' };
@@ -2423,8 +2516,13 @@
     const canToggleRow = (urow) =>
       me.role === 'supervisor' || (me.role === 'interviewer' && me.id === urow.id);
 
+    const activeProjectKey = fil.roomId || '';
+
     function oneRow(uv) {
-      const rec = subs[uv.id];
+      const rec =
+        activeProjectKey && subsByProj[uv.id] && typeof subsByProj[uv.id] === 'object'
+          ? subsByProj[uv.id][activeProjectKey]
+          : subsFlat[uv.id];
       const at = rec && rec.at ? Number(rec.at) : 0;
       const submitted = at > 0 && !(rec && rec.cleared);
       const status = submitted
@@ -3190,12 +3288,17 @@
           const allowed =
             state.me.role === 'supervisor' || (state.me.role === 'interviewer' && state.me.id === id);
           if (!allowed) return;
+        if (!view.trafficListFilter || !view.trafficListFilter.roomId) {
+          showToast('프로젝트(단체방)를 먼저 선택해 주세요.');
+          return;
+        }
+        const pk = view.trafficListFilter.roomId;
           if (action === 'set') {
-            markTrafficExpenseSubmittedForIv(id, { manual: true, source: 'manual' });
+          markTrafficExpenseSubmittedForIvProjectKey(id, pk, { manual: true, source: 'manual' });
             saveState();
             showToast('제출 완료로 표시했습니다.');
           } else if (action === 'clear') {
-            markTrafficExpenseClearedForIv(id, { source: 'manual-clear' });
+          markTrafficExpenseClearedForIvProjectKey(id, pk, { source: 'manual-clear' });
             saveState();
             showToast('제출 표시를 지웠습니다.');
           }

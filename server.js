@@ -56,6 +56,8 @@ function emptyShared() {
     staffPresenceByUser: {},
     /** 면접원 account id → { at, source?, manual? } 교통비 제출 표시 */
     trafficExpenseSubmittedByIvId: {},
+    /** 면접원 account id → (프로젝트 key → { at, source?, manual?, cleared?, files?, summary? }) */
+    trafficExpenseSubmittedByIvProjectKey: {},
   };
 }
 
@@ -68,6 +70,17 @@ function mergeTrafficExpenseMaps(base, incoming) {
     const tb = vb && typeof vb === 'object' ? Number(vb.at) || 0 : 0;
     const ta = va && typeof va === 'object' ? Number(va.at) || 0 : 0;
     if (tb >= ta) out[k] = vb;
+  }
+  return out;
+}
+
+function mergeTrafficExpenseProjectMaps(base, incoming) {
+  const out = { ...(base && typeof base === 'object' ? base : {}) };
+  if (!incoming || typeof incoming !== 'object') return out;
+  for (const ivId of Object.keys(incoming)) {
+    const cur = out[ivId] && typeof out[ivId] === 'object' ? out[ivId] : {};
+    const inc = incoming[ivId] && typeof incoming[ivId] === 'object' ? incoming[ivId] : {};
+    out[ivId] = mergeTrafficExpenseMaps(cur, inc);
   }
   return out;
 }
@@ -232,6 +245,13 @@ function mergeSharedUpdate(payload) {
       payload.trafficExpenseSubmittedByIvId && typeof payload.trafficExpenseSubmittedByIvId === 'object'
         ? mergeTrafficExpenseMaps(shared.trafficExpenseSubmittedByIvId, payload.trafficExpenseSubmittedByIvId)
         : shared.trafficExpenseSubmittedByIvId,
+    trafficExpenseSubmittedByIvProjectKey:
+      payload.trafficExpenseSubmittedByIvProjectKey && typeof payload.trafficExpenseSubmittedByIvProjectKey === 'object'
+        ? mergeTrafficExpenseProjectMaps(
+            shared.trafficExpenseSubmittedByIvProjectKey,
+            payload.trafficExpenseSubmittedByIvProjectKey
+          )
+        : shared.trafficExpenseSubmittedByIvProjectKey,
   };
 }
 
