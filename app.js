@@ -2538,10 +2538,11 @@
     const activeProjectKey = fil.roomId || '';
 
     function oneRow(uv) {
-      const rec =
-        activeProjectKey && subsByProj[uv.id] && typeof subsByProj[uv.id] === 'object'
-          ? subsByProj[uv.id][activeProjectKey]
-          : subsFlat[uv.id];
+      const rec = activeProjectKey
+        ? subsByProj[uv.id] && typeof subsByProj[uv.id] === 'object'
+          ? subsByProj[uv.id][activeProjectKey] || null
+          : null
+        : subsFlat[uv.id];
       const at = rec && rec.at ? Number(rec.at) : 0;
       const submitted = at > 0 && !(rec && rec.cleared);
       const status = submitted
