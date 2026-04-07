@@ -1933,7 +1933,7 @@
       ? `<button type="button" class="tab ${view.tab === 'feedback' ? 'active' : ''}" data-tab="feedback">질문 / 의견</button>`
       : '';
     const tabDevBulkBtn = showAccTab
-      ? `<button type="button" class="tab ${view.tab === 'devbulk' ? 'active' : ''}" data-tab="devbulk">개발자 모드</button>`
+      ? `<button type="button" class="tab ${view.tab === 'devbulk' ? 'active' : ''}" data-tab="devbulk">개인/단체 전송</button>`
       : '';
     const showTrafficToolTab = me.role === 'supervisor' || me.role === 'interviewer';
     const tabTrafficBtn =
@@ -2149,10 +2149,11 @@
     if (!state.trafficExpenseSubmittedByIvId || typeof state.trafficExpenseSubmittedByIvId !== 'object')
       state.trafficExpenseSubmittedByIvId = {};
     const record = {
-      at: Date.now(),
+      at: opts && typeof opts.at === 'number' && Number.isFinite(opts.at) ? opts.at : Date.now(),
       manual: !!(opts && opts.manual),
       source: (opts && opts.source) || 'manual',
     };
+    if (opts && opts.cleared) record.cleared = true;
     // 파일 정보 저장 (Supabase Storage URLs)
     if (opts && opts.files) {
       record.files = opts.files;
@@ -2161,6 +2162,23 @@
     if (opts && opts.summary) {
       record.summary = opts.summary;
     }
+    state.trafficExpenseSubmittedByIvId[id] = record;
+    return true;
+  }
+
+  function markTrafficExpenseClearedForIv(ivAccountId, opts) {
+    const id = String(ivAccountId || '').trim();
+    if (!id) return false;
+    const acc = state.accounts.find((a) => a.id === id && a.role === 'interviewer');
+    if (!acc) return false;
+    if (!state.trafficExpenseSubmittedByIvId || typeof state.trafficExpenseSubmittedByIvId !== 'object')
+      state.trafficExpenseSubmittedByIvId = {};
+    const record = {
+      at: Date.now(),
+      cleared: true,
+      manual: true,
+      source: (opts && opts.source) || 'manual-clear',
+    };
     state.trafficExpenseSubmittedByIvId[id] = record;
     return true;
   }
@@ -2309,10 +2327,12 @@
         rememberTrafficBridgeRowId(row.id);
         continue;
       }
+      const at = row.created_at ? Date.parse(row.created_at) : 0;
       const opts = {
         source: (p.source || 'route-calc') + '+supabase',
         files: p.files || null,
         summary: p.summary || null,
+        at: at || undefined,
       };
       if (markTrafficExpenseSubmittedForIv(acc.id, { ...opts, manual: false })) changed = true;
       rememberTrafficBridgeRowId(row.id);
@@ -2406,7 +2426,7 @@
     function oneRow(uv) {
       const rec = subs[uv.id];
       const at = rec && rec.at ? Number(rec.at) : 0;
-      const submitted = at > 0;
+      const submitted = at > 0 && !(rec && rec.cleared);
       const status = submitted
         ? `<span class="traffic-cell-status traffic-cell-status--ok">제출 완료 · ${escapeHtml(formatTime(at))}</span>`
         : `<span class="traffic-cell-status traffic-cell-status--no">미제출</span>`;
@@ -2643,7 +2663,7 @@
     const allIv = state.accounts.filter((u) => u.role === 'interviewer');
     if (!allIv.length) {
       return `<div class="devbulk-tab feedback-tab">
-        <h2 class="feedback-heading">개발자 모드</h2>
+        <h2 class="feedback-heading">개인/단체 전송</h2>
         <p class="hint" style="padding:1rem 0">등록된 면접원이 없습니다. 계정 탭에서 먼저 등록해 주세요.</p>
       </div>`;
     }
@@ -2701,7 +2721,7 @@
         </div>`;
     return `
       <div class="devbulk-tab feedback-tab">
-        <h2 class="feedback-heading">개발자 모드</h2>
+        <h2 class="feedback-heading">개인/단체 전송</h2>
         <p class="caption"><strong>검색해서 면접원을 골라 추가</strong>하면 아래 작업 표에만 모입니다. 표에서 행마다 문구·사진을 다르게 넣고「한꺼번에 전송」하면 각자 1:1 채팅으로 갑니다.</p>
         <section class="devbulk-pick-panel" aria-label="면접원 검색 및 추가">
           <div class="field devbulk-search-field">
@@ -2743,14 +2763,11 @@
     }
     const sel = new Set(view.devBulkSelectedIds);
     let ivs = state.accounts.filter((u) => u.role === 'interviewer' && accountMatchesSearch(u, q) && !sel.has(u.id));
-    const MAX = 25;
     if (!ivs.length) {
       box.innerHTML =
         '<p class="hint devbulk-search-empty" style="margin:0.35rem 0">일치하는 면접원이 없거나 이미 작업 목록에 있습니다.</p>';
       return;
     }
-    const more = ivs.length > MAX;
-    ivs = ivs.slice(0, MAX);
     const btns = ivs
       .map(
         (u) =>
@@ -2759,11 +2776,7 @@
           )}</strong><span class="caption"> · ${escapeHtml(teamLabel(u.team) || '팀 미지정')} · @${escapeHtml(u.loginId)}</span></button>`
       )
       .join('');
-    box.innerHTML =
-      btns +
-      (more
-        ? `<p class="hint" style="margin:0.4rem 0 0">더 많습니다. 검색을 좁히면 됩니다. (최대 ${MAX}명 표시)</p>`
-        : '');
+    box.innerHTML = btns;
   }
 
   function accountsAdminHTML() {
@@ -3182,9 +3195,7 @@
             saveState();
             showToast('제출 완료로 표시했습니다.');
           } else if (action === 'clear') {
-            if (state.trafficExpenseSubmittedByIvId && state.trafficExpenseSubmittedByIvId[id]) {
-              delete state.trafficExpenseSubmittedByIvId[id];
-            }
+            markTrafficExpenseClearedForIv(id, { source: 'manual-clear' });
             saveState();
             showToast('제출 표시를 지웠습니다.');
           }

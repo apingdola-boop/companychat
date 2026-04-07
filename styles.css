@@ -2310,16 +2310,38 @@ html[data-theme='light'] .traffic-expense-grid tbody tr:hover td {
   color: var(--text);
 }
 
-.traffic-tool-tab .traffic-tool-bar {
-  margin: 0.65rem 0 0.75rem;
+.traffic-tool-embed-block {
+  margin: 0 0 1.1rem;
+  padding: 0.85rem 1rem;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface2);
 }
 
-.traffic-tool-tab .traffic-tool-open {
+.traffic-block-title {
+  margin: 0 0 0.55rem;
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.traffic-tool-tab .traffic-tool-bar {
   display: flex;
-  width: 100%;
-  box-sizing: border-box;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0 0 0.5rem;
+}
+
+.traffic-tool-tab .traffic-tool-open-newtab {
+  flex: 1 1 12rem;
   justify-content: center;
+}
+
+.traffic-tool-tab .traffic-tool-open-href {
+  flex: 0 0 auto;
   text-decoration: none;
+  font-size: 0.82rem;
 }
 
 .traffic-iframe-wrap {
