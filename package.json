@@ -5,6 +5,7 @@
   "scripts": {
     "start": "node server.js",
     "serve": "node server.js",
+    "build:seed": "node scripts/build-seed-accounts.mjs",
     "tunnel": "npx --yes localtunnel@2.0.2 --port 8787"
   },
   "engines": {
@@ -14,5 +15,8 @@
     "@supabase/supabase-js": "^2.49.1",
     "express": "^4.21.2",
     "socket.io": "^4.8.1"
+  },
+  "devDependencies": {
+    "xlsx": "^0.18.5"
   }
 }

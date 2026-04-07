@@ -166,13 +166,14 @@
   /** 슈퍼바이저·면접원 — 교통비·거리 계산 외부 도구 (ROUTE CALC, GitHub Pages) */
   const TRAFFIC_TOOL_URL = 'https://apingdola-boop.github.io/trafficservice.github.io/';
 
-  const TEAM_ORDER = ['seoul', 'busan', 'daegu', 'daejeon', 'gwangju'];
+  const TEAM_ORDER = ['quant1', 'quant2', 'busan', 'daegu', 'daejeon', 'gwangju'];
   const TEAMS = {
+    quant1: '정량조사부 1팀',
+    quant2: '정량조사부 2팀',
     busan: '부산팀',
-    daejeon: '대전팀',
     daegu: '대구팀',
+    daejeon: '대전팀',
     gwangju: '광주팀',
-    seoul: '서울팀',
   };
 
   /** 연구원·슈퍼바이저 업무 상태(면접원 미사용): 초록 업무·주황 자리비움·빨강 휴가 */
@@ -195,7 +196,9 @@
     if (raw === '대전팀' || c === '대전' || t === 'daejeon' || t === 'daejeonteam') return 'daejeon';
     if (raw === '대구팀' || c === '대구' || t === 'daegu' || t === 'daeguteam') return 'daegu';
     if (raw === '광주팀' || c === '광주' || t === 'gwangju' || t === 'gwangjuteam') return 'gwangju';
-    if (raw === '서울팀' || c === '서울' || t === 'seoul' || t === 'seoulteam') return 'seoul';
+    if (raw === '정량조사부 1팀' || c === '정량조사부1팀' || t === 'quant1') return 'quant1';
+    if (raw === '정량조사부 2팀' || c === '정량조사부2팀' || t === 'quant2') return 'quant2';
+    if (raw === '서울팀' || c === '서울' || t === 'seoul' || t === 'seoulteam') return 'quant1';
     return null;
   }
 
@@ -539,7 +542,11 @@
 
     const base = {
       me: data.me && data.me.loginId ? data.me : null,
-      accounts: Array.isArray(data.accounts) ? data.accounts : [],
+      accounts: Array.isArray(data.accounts)
+        ? data.accounts.map((a) =>
+            a && a.role === 'interviewer' && a.team === 'seoul' ? { ...a, team: 'quant1' } : a
+          )
+        : [],
       rooms: Array.isArray(data.rooms) ? data.rooms : [],
       messages: data.messages && typeof data.messages === 'object' ? data.messages : {},
       feedbackThreads: Array.isArray(data.feedbackThreads) ? data.feedbackThreads : [],
@@ -2156,7 +2163,7 @@
           <button type="button" class="btn btn-secondary" id="btn-xlsx-template">양식(엑셀) 받기</button>
           <label class="btn btn-secondary btn-file">엑셀 업로드<input type="file" id="input-xlsx-import" accept=".xlsx,.xls,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" /></label>
         </div>
-        <p class="caption"><strong>엑셀 형식</strong> — 1행: <code>아이디 | 비밀번호 | 이름 | 역할 | 팀</code> · <strong>팀</strong>은 면접원일 때만 필수(부산팀·대전팀·대구팀·광주팀·서울팀 또는 부산/대전 등). 연구원·슈퍼바이저는 팀 칸 비워도 됩니다.</p>
+        <p class="caption"><strong>엑셀 형식</strong> — 1행: <code>아이디 | 비밀번호 | 이름 | 역할 | 팀</code> · <strong>팀</strong>은 면접원일 때만 필수(부산팀·대구팀·대전팀·광주팀·정량조사부 1팀·정량조사부 2팀 또는 부산/대구/quant1 등). 연구원·슈퍼바이저는 팀 칸 비워도 됩니다.</p>
         <p class="caption">이 탭은 <strong>연구원·슈퍼바이저만</strong> 사용할 수 있습니다. 비밀번호는 이 기기에만 해시로 저장됩니다.</p>
       </div>
       ${cards || '<p class="hint" style="padding:1.5rem">등록된 계정이 없습니다.</p>'}
@@ -3028,7 +3035,7 @@
       if (role === 'interviewer') {
         team = overlay.querySelector('#acc-team').value;
         if (!team || !TEAMS[team]) {
-          alert('면접원은 부산·대전·대구·광주·서울 팀 중 하나를 선택해 주세요.');
+          alert('면접원은 부산·대구·대전·광주·정량조사부 1팀·정량조사부 2팀 중 하나를 선택해 주세요.');
           return;
         }
       }
@@ -3073,7 +3080,7 @@
       ['kim_sup', 'temp1234', '김슈퍼', '슈퍼바이저', ''],
       ['lee_rs', 'temp5678', '이연구', '연구원', ''],
       ['park_iv', 'temp1234', '박면접', '면접원', '부산팀'],
-      ['jung_iv', 'temp1234', '정면접', '면접원', '서울팀'],
+      ['jung_iv', 'temp1234', '정면접', '면접원', '정량조사부 2팀'],
     ]);
     ws['!cols'] = [{ wch: 14 }, { wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 10 }];
     const wb = XLSX.utils.book_new();
@@ -3161,7 +3168,7 @@
         team = normalizeInterviewerTeam(teamCell);
         if (!team) {
           errors.push(
-            `${sheetRow}행 (${loginId}): 면접원은 5열「팀」에 부산팀·대전팀·대구팀·광주팀·서울팀(또는 부산/대전 등) 입력`
+            `${sheetRow}행 (${loginId}): 면접원은 5열「팀」에 부산팀·대구팀·대전팀·광주팀·정량조사부 1팀·정량조사부 2팀(또는 부산/대구/quant1 등) 입력`
           );
           continue;
         }
@@ -3381,7 +3388,7 @@
         { id: 'demo-r2', loginId: 'researcher2', password: 'demo1234', name: '이실험', role: 'researcher' },
         { id: 'demo-s1', loginId: 'supervisor1', password: 'demo1234', name: '박슈퍼', role: 'supervisor' },
         { id: 'demo-i1', loginId: 'interviewer1', password: 'demo1234', name: '최면접', role: 'interviewer', team: 'busan' },
-        { id: 'demo-i2', loginId: 'interviewer2', password: 'demo1234', name: '정리서치', role: 'interviewer', team: 'seoul' },
+        { id: 'demo-i2', loginId: 'interviewer2', password: 'demo1234', name: '정리서치', role: 'interviewer', team: 'quant2' },
       ];
       state.accounts = [];
       for (const r of rows) {

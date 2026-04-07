@@ -7,6 +7,9 @@
  *   SQL: supabase/migrations/001_company_chat_app_state.sql 실행
  *
  * ■ Supabase 미설정 시: DATA_DIR/shared-state.json (로컬·Render 디스크)
+ *
+ * ■ 기본 계정 대량 등록: data/seed-accounts.json (npm run build:seed 로 chat2.xlsx 에서 생성)
+ *   계정이 비어 있을 때 이 파일이 있으면 데모 5명 대신 시드 목록을 씁니다. (/data/seed-accounts.json 은 외부에 노출되지 않음)
  */
 'use strict';
 
@@ -24,6 +27,7 @@ const PORT = Number(process.env.PORT) || 8787;
 const HOST = process.env.HOST || '0.0.0.0';
 const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(ROOT, 'data');
 const DATA_FILE = path.join(DATA_DIR, 'shared-state.json');
+const SEED_ACCOUNTS_FILE = path.join(ROOT, 'data', 'seed-accounts.json');
 const PUBLIC_URL_FILE = path.join(DATA_DIR, 'public-base-url.txt');
 
 const APP_STATE_TABLE = 'company_chat_app_state';
@@ -59,7 +63,7 @@ function seedDemoAccounts() {
     { id: 'demo-r2', loginId: 'researcher2', password: 'demo1234', name: '이실험', role: 'researcher' },
     { id: 'demo-s1', loginId: 'supervisor1', password: 'demo1234', name: '박슈퍼', role: 'supervisor' },
     { id: 'demo-i1', loginId: 'interviewer1', password: 'demo1234', name: '최면접', role: 'interviewer', team: 'busan' },
-    { id: 'demo-i2', loginId: 'interviewer2', password: 'demo1234', name: '정리서치', role: 'interviewer', team: 'seoul' },
+    { id: 'demo-i2', loginId: 'interviewer2', password: 'demo1234', name: '정리서치', role: 'interviewer', team: 'quant2' },
   ];
   const accounts = [];
   for (const r of rows) {
@@ -74,6 +78,31 @@ function seedDemoAccounts() {
     accounts.push(acc);
   }
   return accounts;
+}
+
+/** chat2.xlsx 기반 등 — 있으면 빈 계정 시 이 목록을 우선 사용 */
+function loadSeedAccountsFile() {
+  try {
+    const raw = fs.readFileSync(SEED_ACCOUNTS_FILE, 'utf8');
+    const j = JSON.parse(raw);
+    if (!j || !Array.isArray(j.accounts) || !j.accounts.length) return null;
+    const accounts = [];
+    for (const a of j.accounts) {
+      if (!a || !a.id || !a.loginId || !a.passHash || !a.name || !a.role) continue;
+      const acc = {
+        id: String(a.id),
+        loginId: String(a.loginId),
+        passHash: String(a.passHash),
+        name: String(a.name),
+        role: a.role,
+      };
+      if (a.team) acc.team = String(a.team);
+      accounts.push(acc);
+    }
+    return accounts.length ? accounts : null;
+  } catch (_) {
+    return null;
+  }
 }
 
 function saveSharedToDisk(obj) {
@@ -199,16 +228,26 @@ function migrateInterviewerChatRoomDefault() {
 }
 
 function ensureAccountsNonEmpty() {
-  if (!Array.isArray(shared.accounts) || shared.accounts.length === 0) {
-    console.warn('[H-채팅] 계정 목록이 비어 있어 데모 계정을 채웁니다.');
-    shared.accounts = seedDemoAccounts();
+  if (Array.isArray(shared.accounts) && shared.accounts.length > 0) return;
+  const seeded = loadSeedAccountsFile();
+  if (seeded && seeded.length) {
+    console.log('[H-채팅] 계정 비어 있음 → data/seed-accounts.json 로드 (' + seeded.length + '명)');
+    shared.accounts = seeded;
+    return;
   }
+  console.warn('[H-채팅] 계정 목록이 비어 있어 데모 계정을 채웁니다.');
+  shared.accounts = seedDemoAccounts();
 }
 
 function initFromFile() {
   const dataFileExists = fs.existsSync(DATA_FILE);
   if (!dataFileExists) {
-    shared = { ...emptyShared(), accounts: seedDemoAccounts() };
+    const seeded = loadSeedAccountsFile();
+    if (seeded && seeded.length) {
+      shared = { ...emptyShared(), accounts: seeded };
+    } else {
+      shared = { ...emptyShared(), accounts: seedDemoAccounts() };
+    }
     saveSharedToDisk(shared);
     return;
   }
@@ -249,7 +288,12 @@ async function initFromSupabase() {
   }
 
   if (!row) {
-    shared = { ...emptyShared(), accounts: seedDemoAccounts() };
+    const seeded = loadSeedAccountsFile();
+    if (seeded && seeded.length) {
+      shared = { ...emptyShared(), accounts: seeded };
+    } else {
+      shared = { ...emptyShared(), accounts: seedDemoAccounts() };
+    }
     return;
   }
 
@@ -327,6 +371,14 @@ app.get('/api/lan-urls', (_req, res) => {
 });
 
 app.use(express.json({ limit: '4kb' }));
+
+app.use((req, res, next) => {
+  const p = req.path.replace(/\\/g, '/');
+  if (p === '/data/seed-accounts.json' || p.endsWith('/seed-accounts.json')) {
+    return res.status(404).end();
+  }
+  next();
+});
 
 app.post('/api/admin/public-url', (req, res) => {
   if (!isLocalAdminRequest(req)) {
