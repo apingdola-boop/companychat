@@ -737,7 +737,7 @@
     /** 개발자 모드: 검색창 입력 유지용 */
     devBulkSearchDraft: '',
     /** 교통비 현황표: 검색·팀·프로젝트(단체방) 필터 */
-    trafficListFilter: { q: '', team: '', roomId: '' },
+    trafficListFilter: { q: '', team: '', roomId: '', ym: '' },
   };
 
   /** 개발자 모드: 면접원 계정 id → 첨부 예정 사진(data URL). 탭을 벗어나면 비움. */
@@ -2343,7 +2343,7 @@
         ? state.trafficExpenseSubmittedByIvId
         : {};
     if (!view.trafficListFilter || typeof view.trafficListFilter !== 'object')
-      view.trafficListFilter = { q: '', team: '', roomId: '' };
+      view.trafficListFilter = { q: '', team: '', roomId: '', ym: '' };
     const fil = view.trafficListFilter;
 
     const ivsAll = state.accounts.filter((x) => x.role === 'interviewer');
@@ -2379,6 +2379,24 @@
         const label = tk === '_other' ? '팀 미지정 · 기타' : TEAMS[tk] || tk;
         const sel = fil.team === tk ? ' selected' : '';
         return `<option value="${escapeHtml(tk)}"${sel}>${escapeHtml(label)}</option>`;
+      }),
+    ].join('');
+
+    const ymSet = new Set();
+    for (const iv of ivsAll) {
+      const rec = subs[iv.id];
+      const at = rec && rec.at ? Number(rec.at) : 0;
+      if (!at) continue;
+      const d = new Date(at);
+      const ym = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+      ymSet.add(ym);
+    }
+    const ymOrdered = [...ymSet].sort().reverse();
+    const ymOpts = [
+      '<option value="">' + escapeHtml('전체 월') + '</option>',
+      ...ymOrdered.map((ym) => {
+        const sel = fil.ym === ym ? ' selected' : '';
+        return `<option value="${escapeHtml(ym)}"${sel}>${escapeHtml(ym.replace('-', '년 ') + '월')}</option>`;
       }),
     ].join('');
 
@@ -2431,11 +2449,18 @@
         .join(' ')
         .toLowerCase();
 
+      const ym = submitted
+        ? (() => {
+            const d = new Date(at);
+            return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+          })()
+        : '';
+
       return `<tr class="traffic-iv-row" data-iv-id="${escapeHtml(uv.id)}" data-team-key="${escapeHtml(
         tk
       )}" data-room-ids="${escapeHtml(roomIdList)}" data-search="${escapeHtml(searchHay)}" data-submitted="${
         submitted ? '1' : '0'
-      }">
+      }" data-ym="${escapeHtml(ym)}">
           <td class="traffic-cell-id"><code>${escapeHtml(String(uv.loginId))}</code></td>
           <td>${escapeHtml(uv.name)}</td>
           <td>${escapeHtml(teamLabel(uv.team) || '—')}</td>
@@ -2487,6 +2512,8 @@
           <div class="traffic-table-toolbar">
             <label class="traffic-filter-field"><span class="traffic-filter-label">검색</span>
               <input type="search" id="traffic-filter-q" class="traffic-filter-input" placeholder="이름, 아이디, 팀, 프로젝트명" autocomplete="off" value="${filterQEsc}" /></label>
+            <label class="traffic-filter-field"><span class="traffic-filter-label">월</span>
+              <select id="traffic-filter-ym" class="traffic-filter-select">${ymOpts}</select></label>
             <label class="traffic-filter-field"><span class="traffic-filter-label">팀</span>
               <select id="traffic-filter-team" class="traffic-filter-select">${teamOpts}</select></label>
             <label class="traffic-filter-field traffic-filter-field--grow"><span class="traffic-filter-label">프로젝트 (단체방)</span>
@@ -2538,6 +2565,7 @@
       .toLowerCase();
     const team = (view.trafficListFilter && view.trafficListFilter.team) || '';
     const roomId = (view.trafficListFilter && view.trafficListFilter.roomId) || '';
+    const ym = (view.trafficListFilter && view.trafficListFilter.ym) || '';
     const ivRows = tbody.querySelectorAll('tr.traffic-iv-row');
     let sub = 0;
     let tot = 0;
@@ -2545,10 +2573,12 @@
       const tid = tr.getAttribute('data-team-key') || '';
       const rooms = (tr.getAttribute('data-room-ids') || '').split(',').filter(Boolean);
       const hay = (tr.getAttribute('data-search') || '').toLowerCase();
+      const rowYm = tr.getAttribute('data-ym') || '';
       let show = true;
       if (q && !hay.includes(q)) show = false;
       if (team && tid !== team) show = false;
       if (roomId && !rooms.includes(roomId)) show = false;
+      if (ym && rowYm !== ym) show = false;
       tr.style.display = show ? '' : 'none';
       if (show) {
         tot++;
@@ -2572,12 +2602,14 @@
 
   function bindTrafficExpenseFilters() {
     const qEl = document.getElementById('traffic-filter-q');
+    const ymEl = document.getElementById('traffic-filter-ym');
     const teamEl = document.getElementById('traffic-filter-team');
     const roomEl = document.getElementById('traffic-filter-room');
-    if (!qEl || !teamEl || !roomEl) return;
+    if (!qEl || !ymEl || !teamEl || !roomEl) return;
     if (!view.trafficListFilter || typeof view.trafficListFilter !== 'object')
-      view.trafficListFilter = { q: '', team: '', roomId: '' };
+      view.trafficListFilter = { q: '', team: '', roomId: '', ym: '' };
     qEl.value = view.trafficListFilter.q || '';
+    ymEl.value = view.trafficListFilter.ym || '';
     teamEl.value = view.trafficListFilter.team || '';
     roomEl.value = view.trafficListFilter.roomId || '';
     let qTimer = null;
@@ -2586,6 +2618,10 @@
       view.trafficListFilter.q = qEl.value;
       clearTimeout(qTimer);
       qTimer = setTimeout(run, 120);
+    });
+    ymEl.addEventListener('change', () => {
+      view.trafficListFilter.ym = ymEl.value;
+      run();
     });
     teamEl.addEventListener('change', () => {
       view.trafficListFilter.team = teamEl.value;
