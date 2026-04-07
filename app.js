@@ -2267,6 +2267,30 @@
       state.trafficExpenseSubmittedByIvProjectKey = {};
     if (!state.trafficExpenseSubmittedByIvProjectKey[id] || typeof state.trafficExpenseSubmittedByIvProjectKey[id] !== 'object')
       state.trafficExpenseSubmittedByIvProjectKey[id] = {};
+    // 같은 업로드(엑셀 URL)가 여러 프로젝트에 동시에 찍히는 과거/중복 신호를 자동 정리:
+    // 현재 프로젝트(pk)에만 남기고, 같은 excel URL을 가진 다른 프로젝트 기록은 '취소'로 덮어씀
+    try {
+      const excelUrl = opts && opts.files && opts.files.excel ? String(opts.files.excel) : '';
+      if (excelUrl) {
+        const byPk = state.trafficExpenseSubmittedByIvProjectKey[id];
+        for (const otherPk of Object.keys(byPk)) {
+          if (otherPk === pk) continue;
+          const r = byPk[otherPk];
+          if (!r || typeof r !== 'object') continue;
+          if (r.cleared) continue;
+          const ex2 = r.files && r.files.excel ? String(r.files.excel) : '';
+          if (!ex2) continue;
+          if (ex2 === excelUrl) {
+            byPk[otherPk] = {
+              at: Date.now(),
+              cleared: true,
+              manual: false,
+              source: 'auto-dedupe',
+            };
+          }
+        }
+      }
+    } catch (_) {}
     const record = {
       at: opts && typeof opts.at === 'number' && Number.isFinite(opts.at) ? opts.at : Date.now(),
       manual: !!(opts && opts.manual),
@@ -2601,6 +2625,10 @@
         at: at || undefined,
       };
       const projectKey = guessProjectKeyForTrafficPayload(p);
+      if (projectKey && (projectKey.startsWith('ambiguous:') || projectKey.startsWith('unmatched:'))) {
+        rememberTrafficBridgeRowId(row.id);
+        continue;
+      }
       if (projectKey) {
         if (markTrafficExpenseSubmittedForIvProjectKey(acc.id, projectKey, { ...opts, manual: false })) changed = true;
       } else {
