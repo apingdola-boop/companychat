@@ -6,6 +6,8 @@
   const LS_THEME = 'company-chat-theme';
   /** 메인 상단에서 「더보기」로 펼친 질문/의견·교통비 탭 유지 */
   const LS_EXTRA_MAIN_TABS = 'company-chat-extra-main-tabs';
+  /** 유류비 단독 탭 → Supabase `traffic_submission_signals` 처리 완료 row id */
+  const LS_TRAFFIC_BRIDGE_IDS = 'company-chat-traffic-bridge-done-ids';
 
   function getExtraMainTabsOpen() {
     try {
@@ -208,30 +210,81 @@
     return false;
   }
 
-  /** postMessage 페이로드로 면접원 계정 찾기 (loginId / ivId / accountId 등) */
+  /** 유류비 postMessage에서 이름·아이디 비교용 (공백 정리·소문자) */
+  function normalizeTrafficLookupKey(s) {
+    return String(s ?? '')
+      .trim()
+      .replace(/\s+/g, ' ')
+      .toLowerCase();
+  }
+
+  /** postMessage 페이로드로 면접원 계정 찾기 (로그인 아이디·표시 이름·내부 id·사번 형식 번호 등) */
   function findInterviewerForTrafficMessage(data) {
     if (!data || typeof data !== 'object') return null;
     const accounts = state.accounts.filter((a) => a.role === 'interviewer');
     if (!accounts.length) return null;
+
+    function matchByLoginIdString(raw) {
+      const t = raw != null ? String(raw).trim() : '';
+      if (!t) return null;
+      const folded = t.toLowerCase().replace(/\s/g, '');
+      let acc = accounts.find((a) => String(a.loginId).trim() === t);
+      if (!acc) acc = accounts.find((a) => String(a.loginId).trim().toLowerCase().replace(/\s/g, '') === folded);
+      return acc || null;
+    }
+
+    /** companychat 내부 id 또는 로그인 아이디(숫자 사번 등) */
+    function matchByAnyId(raw) {
+      const t = raw != null ? String(raw).trim() : '';
+      if (!t) return null;
+      let acc = accounts.find((a) => String(a.id).trim() === t);
+      if (!acc) acc = matchByLoginIdString(t);
+      return acc || null;
+    }
+
+    /** 동일 표시 이름이 한 명일 때만 (동명이인이면 매칭 안 함) */
+    function matchByDisplayName(raw) {
+      const nk = normalizeTrafficLookupKey(raw);
+      if (!nk) return null;
+      const hits = accounts.filter((a) => normalizeTrafficLookupKey(a.name) === nk);
+      if (hits.length === 1) return hits[0];
+      return null;
+    }
+
+    const nameCandidates = [
+      data.name,
+      data.ivName,
+      data.interviewerName,
+      data.userName,
+      data.displayName,
+    ];
+    for (const nc of nameCandidates) {
+      const hit = matchByDisplayName(nc);
+      if (hit) return hit;
+    }
+
+    const idCandidates = [
+      data.ivId,
+      data.accountId,
+      data.interviewerId,
+      data.memberId,
+      data.staffId,
+      data.employeeId,
+    ];
+    for (const ic of idCandidates) {
+      if (ic == null || ic === '') continue;
+      const hit = matchByAnyId(ic);
+      if (hit) return hit;
+    }
+
     const lidRaw = data.loginId != null ? String(data.loginId).trim() : '';
     if (lidRaw) {
-      const lower = lidRaw.toLowerCase().replace(/\s/g, '');
-      let acc = accounts.find((a) => String(a.loginId).trim() === lidRaw);
-      if (!acc) acc = accounts.find((a) => String(a.loginId).trim().toLowerCase().replace(/\s/g, '') === lower);
-      if (acc) return acc;
+      const byLogin = matchByLoginIdString(lidRaw);
+      if (byLogin) return byLogin;
+      const byName = matchByDisplayName(lidRaw);
+      if (byName) return byName;
     }
-    const idRaw =
-      data.ivId != null
-        ? String(data.ivId).trim()
-        : data.accountId != null
-          ? String(data.accountId).trim()
-          : data.interviewerId != null
-            ? String(data.interviewerId).trim()
-            : '';
-    if (idRaw) {
-      const acc = accounts.find((a) => String(a.id).trim() === idRaw);
-      if (acc) return acc;
-    }
+
     return null;
   }
 
@@ -691,6 +744,9 @@
   const devBulkPendingImageByIvId = Object.create(null);
 
   let trafficPostMessageListenerAttached = false;
+  let trafficCrossTabStorageAttached = false;
+  let trafficBridgeSupabaseClient = null;
+  let trafficBridgePollStarted = false;
 
   const el = {
     root: null,
@@ -2166,6 +2222,118 @@
     window.addEventListener('message', onTrafficToolPostMessage, false);
   }
 
+  /** 다른 탭에서 저장한 교통비 제출 맵을 localStorage(storage 이벤트)으로 반영 */
+  function onTrafficSharedStorageSync(ev) {
+    if (ev.key !== STORAGE_V2 || !ev.newValue || ev.storageArea !== localStorage) return;
+    try {
+      const data = JSON.parse(ev.newValue);
+      const incoming = data.trafficExpenseSubmittedByIvId;
+      if (!incoming || typeof incoming !== 'object') return;
+      const merged = mergeTrafficExpenseMaps(state.trafficExpenseSubmittedByIvId, incoming);
+      if (JSON.stringify(state.trafficExpenseSubmittedByIvId || {}) === JSON.stringify(merged)) return;
+      state.trafficExpenseSubmittedByIvId = merged;
+      if (view.screen === 'main' && view.tab === 'traffic') render();
+    } catch (_) {}
+  }
+
+  function ensureTrafficCrossTabStorageSync() {
+    if (trafficCrossTabStorageAttached) return;
+    trafficCrossTabStorageAttached = true;
+    window.addEventListener('storage', onTrafficSharedStorageSync, false);
+  }
+
+  /** 유류비 GitHub Pages 단독 탭용 — Supabase에 쌓인 신호를 읽어 제출 표 갱신 */
+  function getTrafficBridgeSupabase() {
+    if (trafficBridgeSupabaseClient) return trafficBridgeSupabaseClient;
+    const cfg = typeof window !== 'undefined' ? window.COMPANYCHAT_TRAFFIC_BRIDGE : null;
+    if (!cfg || !cfg.url || !cfg.anonKey) return null;
+    const sup = typeof window !== 'undefined' ? window.supabase : null;
+    if (!sup || typeof sup.createClient !== 'function') return null;
+    try {
+      trafficBridgeSupabaseClient = sup.createClient(cfg.url, cfg.anonKey);
+      return trafficBridgeSupabaseClient;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function getProcessedTrafficBridgeIds() {
+    try {
+      const raw = localStorage.getItem(LS_TRAFFIC_BRIDGE_IDS);
+      const arr = raw ? JSON.parse(raw) : [];
+      return Array.isArray(arr) ? arr : [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  function rememberTrafficBridgeRowId(id) {
+    if (!id) return;
+    const arr = getProcessedTrafficBridgeIds();
+    if (arr.includes(id)) return;
+    arr.unshift(id);
+    while (arr.length > 300) arr.pop();
+    try {
+      localStorage.setItem(LS_TRAFFIC_BRIDGE_IDS, JSON.stringify(arr));
+    } catch (_) {}
+  }
+
+  async function pollTrafficBridgeSignalsOnce() {
+    const client = getTrafficBridgeSupabase();
+    if (!client || !state.me) return;
+    const { data, error } = await client
+      .from('traffic_submission_signals')
+      .select('id,payload,created_at')
+      .order('created_at', { ascending: false })
+      .limit(45);
+    if (error) {
+      try {
+        if (localStorage.getItem('company-chat-debug-traffic') === '1')
+          console.warn('[traffic-bridge] Supabase 조회 오류:', error.message || error);
+      } catch (_) {}
+      return;
+    }
+    if (!data || !data.length) return;
+    const done = new Set(getProcessedTrafficBridgeIds());
+    const rows = [...data].reverse();
+    let changed = false;
+    for (const row of rows) {
+      if (done.has(row.id)) continue;
+      const p = row.payload;
+      if (!p || typeof p !== 'object' || p.type !== 'companychat-traffic-submitted') {
+        rememberTrafficBridgeRowId(row.id);
+        continue;
+      }
+      const acc = findInterviewerForTrafficMessage(p);
+      if (!acc) {
+        rememberTrafficBridgeRowId(row.id);
+        continue;
+      }
+      const opts = {
+        source: (p.source || 'route-calc') + '+supabase',
+        files: p.files || null,
+        summary: p.summary || null,
+      };
+      if (markTrafficExpenseSubmittedForIv(acc.id, { ...opts, manual: false })) changed = true;
+      rememberTrafficBridgeRowId(row.id);
+    }
+    if (changed) {
+      saveState();
+      if (view.screen === 'main' && view.tab === 'traffic') render();
+      showToast('유류비 제출이 동기화되었습니다.');
+    }
+  }
+
+  function ensureTrafficBridgePolling() {
+    if (trafficBridgePollStarted) return;
+    if (!getTrafficBridgeSupabase()) return;
+    trafficBridgePollStarted = true;
+    setInterval(function () {
+      if (state.me) pollTrafficBridgeSignalsOnce().catch(function () {});
+    }, 16000);
+    if (state.me) pollTrafficBridgeSignalsOnce().catch(function () {});
+  }
+
   /** 슈퍼바이저·면접원 — 외부 교통·유류비 계산기 (GitHub Pages) + 제출 현황 표 */
   function trafficToolTabHTML(me) {
     const u = TRAFFIC_TOOL_URL;
@@ -2299,7 +2467,21 @@
     return `
       <div class="traffic-tool-tab feedback-tab">
         <h2 class="feedback-heading">교통비 · 거리 계산</h2>
-        <p class="caption">아래 표는 <strong>교통비 제출 여부</strong>를 보여 줍니다. ROUTE CALC를 <strong>이 페이지 안 iframe</strong>에서 연 뒤 전송해야 <code>postMessage</code> 가 companychat으로 옵니다. 새 탭에서만 쓰면 부모 창이 없어 표가 갱신되지 않습니다.</p>
+        <p class="caption">제출 반영: ① iframe·「새 탭에서 열기」로 연 유류비 창에서 전송 시 바로 <code>postMessage</code>. ② <strong>유류비 사이트만 단독으로 연 경우</strong>엔 Supabase <code>traffic_submission_signals</code> 큐로 쌓이며, 이 탭이 열려 있으면 약 16초마다 표에 동기화됩니다. (Supabase에 마이그레이션 <code>002_traffic_submission_signals.sql</code> 적용 필요.)</p>
+
+        <section class="traffic-tool-embed-block" aria-label="ROUTE CALC 도구">
+          <h3 class="traffic-block-title">ROUTE CALC · 거리·유류비</h3>
+          <div class="traffic-tool-bar">
+            <button type="button" class="btn btn-secondary traffic-tool-open-newtab" id="traffic-tool-open-newtab">새 탭에서 전체 화면으로 열기</button>
+            <a class="btn btn-ghost traffic-tool-open-href" href="${esc}" target="_blank" rel="noopener noreferrer">새 탭(링크만)</a>
+          </div>
+          <p class="caption traffic-tool-note">연동을 쓰려면 위 <strong>버튼</strong>으로 여세요(오른쪽 링크는 보안상 opener가 없을 수 있습니다). iframe이 비면 버튼으로 새 탭을 이용해 주세요.</p>
+          <div class="traffic-iframe-wrap">
+            <iframe class="traffic-iframe" title="거리 및 유류비 계산기" src="${esc}" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>
+          </div>
+          <p class="caption traffic-tool-credit">도구 페이지: <a href="${esc}" target="_blank" rel="noopener noreferrer">apingdola-boop.github.io/trafficservice.github.io</a></p>
+        </section>
+
         <div class="traffic-expense-sheet-wrap">
           <h3 class="traffic-sheet-title">면접원 교통비 제출 현황</h3>
           <div class="traffic-table-toolbar">
@@ -2328,28 +2510,23 @@
           </div>
         </div>
         <details class="traffic-integration-details">
-          <summary>ROUTE CALC에서 자동으로 「제출」 표시하기</summary>
-          <p class="caption">GitHub Pages <a href="${esc}" target="_blank" rel="noopener noreferrer">trafficservice</a> 에서 「자동 이메일 전송」 성공 직후 아래를 실행하세요. <code>loginId</code>는 companychat <strong>로그인 아이디</strong>와 같아야 합니다. 내부 계정 id는 <code>ivId</code> 로 보낼 수 있습니다.</p>
-          <pre class="traffic-code-sample">if (window.parent !== window) {
-  window.parent.postMessage(
-    {
-      type: 'companychat-traffic-submitted',
-      loginId: '면접원로그인아이디',
-      // ivId: 'companychat_내부계정id'
-    },
-    '${parentOriginEsc}'
-  );
-}</pre>
-          <p class="caption">companychat 주소가 <code>${parentOriginEsc}</code> 가 아니면 두 번째 인자를 그 출처로 맞추세요. 도구를 다른 도메인에 올렸다면 콘솔에서 <code>localStorage.setItem('company-chat-traffic-tool-origins','https://그origin')</code> 후 새로고침. 디버그: <code>localStorage.setItem('company-chat-debug-traffic','1')</code></p>
+          <summary>ROUTE CALC에서 자동으로 「제출」 표시하기 (개발자용)</summary>
+          <p class="caption">GitHub Pages <a href="${esc}" target="_blank" rel="noopener noreferrer">trafficservice</a> 에서 「자동 이메일 전송」 성공 직후 실행. <strong>loginId</strong>는 표의 면접원 ID(예: 33406)와 같으면 됩니다. 이름만 알면 <strong>name</strong> 필드(동명이인이 없을 때만 매칭). companychat 내부 id는 <strong>ivId</strong>.</p>
+          <pre class="traffic-code-sample">(function () {
+  var targetOrigin = '${parentOriginEsc}';
+  var payload = {
+    type: 'companychat-traffic-submitted',
+    loginId: '33406',
+    // name: '강형희',
+    // ivId: 'companychat_내부_uuid'
+  };
+  var w = null;
+  if (window.opener && !window.opener.closed) w = window.opener;
+  else if (window.parent !== window) w = window.parent;
+  if (w) w.postMessage(payload, targetOrigin);
+})();</pre>
+          <p class="caption"><code>targetOrigin</code>은 companychat 주소와 동일해야 합니다. 표시가 안 되면 콘솔에서 <code>localStorage.setItem('company-chat-debug-traffic','1')</code> 후 새로고침 → 매칭 실패·출처 거부 로그 확인. 다른 도구 도메인은 <code>company-chat-traffic-tool-origins</code> 에 origin 추가.</p>
         </details>
-        <div class="traffic-tool-bar">
-          <a class="btn btn-secondary traffic-tool-open" href="${esc}" target="_blank" rel="noopener noreferrer">새 탭에서 전체 화면으로 열기</a>
-        </div>
-        <div class="traffic-iframe-wrap">
-          <iframe class="traffic-iframe" title="거리 및 유류비 계산기" src="${esc}" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>
-        </div>
-        <p class="caption traffic-tool-note">일부 브라우저에서는 아래 창이 비어 보일 수 있습니다. 그때는 위 버튼으로 새 탭에서 이용해 주세요.</p>
-        <p class="caption traffic-tool-credit">도구 페이지: <a href="${esc}" target="_blank" rel="noopener noreferrer">apingdola-boop.github.io/trafficservice.github.io</a></p>
       </div>`;
   }
 
@@ -2607,6 +2784,8 @@
 
   function bindMain() {
     ensureTrafficPostMessageListener();
+    ensureTrafficCrossTabStorageSync();
+    ensureTrafficBridgePolling();
 
     document.getElementById('btn-logout').addEventListener('click', () => {
       state.me = null;
@@ -2948,6 +3127,9 @@
     }
 
     if (view.tab === 'traffic' && (state.me.role === 'supervisor' || state.me.role === 'interviewer')) {
+      document.getElementById('traffic-tool-open-newtab')?.addEventListener('click', () => {
+        window.open(TRAFFIC_TOOL_URL, '_blank');
+      });
       bindTrafficExpenseFilters();
       document.querySelectorAll('.traffic-submit-toggle').forEach((btn) => {
         btn.addEventListener('click', () => {
