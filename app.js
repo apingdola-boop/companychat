@@ -296,6 +296,13 @@
       const va = out[k];
       const tb = vb && typeof vb === 'object' ? Number(vb.at) || 0 : 0;
       const ta = va && typeof va === 'object' ? Number(va.at) || 0 : 0;
+      const cb = vb && typeof vb === 'object' ? !!vb.cleared : false;
+      const ca = va && typeof va === 'object' ? !!va.cleared : false;
+      // 기기 시간차로 취소가 더 "과거"로 찍혀도, 근접한 경우(10분)는 취소 우선
+      if (cb && !ca && tb > 0 && ta > 0 && ta - tb <= 10 * 60 * 1000) {
+        out[k] = vb;
+        continue;
+      }
       if (tb >= ta) out[k] = vb;
     }
     return out;
