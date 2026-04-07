@@ -3774,10 +3774,10 @@
             <input type="text" id="grp-project-number" placeholder="예: 2025-31-1948" autocomplete="off" />
             <div style="display:flex;gap:0.5rem;align-items:center;margin-top:0.5rem;flex-wrap:wrap">
               <input type="search" id="grp-project-search" placeholder="프로젝트 검색 (번호/이름)" autocomplete="off" style="flex:1 1 14rem" />
-              <label class="btn btn-secondary btn-file" style="flex:0 0 auto">프로젝트 엑셀 업로드<input type="file" id="input-xlsx-projects" accept=".xlsx,.xls,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" /></label>
+              <button type="button" class="btn btn-secondary" id="btn-project-add-temp" style="flex:0 0 auto">임시 등록</button>
             </div>
             <div id="grp-project-results" class="devbulk-search-results" role="listbox" aria-label="프로젝트 검색 결과" style="margin-top:0.5rem"></div>
-            <p class="caption" style="margin-top:0.35rem">엑셀에 프로젝트 번호/프로젝트명 열이 있으면 가져와서 검색으로 선택할 수 있습니다. 선택하면 단체방 이름·프로젝트 번호가 자동 입력됩니다.</p>
+            <p class="caption" style="margin-top:0.35rem">프로젝트를 검색해서 선택할 수 있습니다. 목록에 없으면 번호/이름을 직접 입력한 뒤 <strong>임시 등록</strong>하세요. (프로젝트 목록 엑셀 반영은 서버의 <code>data/seed-projects.json</code>로 미리 넣어 둡니다.)</p>
           </div>
           <div class="field">
             <fieldset style="border:none;margin:0;padding:0;min-width:0">
@@ -3803,7 +3803,7 @@
     const projNumIn = overlay.querySelector('#grp-project-number');
     const projSearchIn = overlay.querySelector('#grp-project-search');
     const projResults = overlay.querySelector('#grp-project-results');
-    const projXlsxIn = overlay.querySelector('#input-xlsx-projects');
+    const projAddTempBtn = overlay.querySelector('#btn-project-add-temp');
     function applyNewChatSearchFilter() {
       const q = searchIn.value || '';
       Array.from(dmSelect.options).forEach((opt, idx) => {
@@ -3946,15 +3946,25 @@
       showToast('프로젝트를 선택했습니다.');
     });
 
-    if (projXlsxIn) {
-      projXlsxIn.addEventListener('change', async () => {
-        const f = projXlsxIn.files && projXlsxIn.files[0];
-        projXlsxIn.value = '';
-        if (!f) return;
-        await importProjectsFromExcelFile(f);
-        renderProjectSearchResults();
-      });
-    }
+    projAddTempBtn?.addEventListener('click', () => {
+      const number = normalizeProjectNumber(projNumIn ? projNumIn.value : '');
+      const nm = normalizeProjectName((overlay.querySelector('#grp-name')?.value || '').trim());
+      const name = normalizeProjectName(nm);
+      if (!number) {
+        showToast('프로젝트 번호를 먼저 입력해 주세요.');
+        return;
+      }
+      if (!Array.isArray(state.projects)) state.projects = [];
+      if (state.projects.some((p) => String(p.number) === number)) {
+        showToast('이미 등록된 프로젝트 번호입니다.');
+        return;
+      }
+      state.projects.push({ number, name: name || '' });
+      state.projects.sort((a, b) => String(a.number).localeCompare(String(b.number)));
+      saveState();
+      showToast('프로젝트를 임시 등록했습니다.');
+      renderProjectSearchResults();
+    });
   }
 
   function openAddAccountModal() {

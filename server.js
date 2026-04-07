@@ -28,6 +28,7 @@ const HOST = process.env.HOST || '0.0.0.0';
 const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(ROOT, 'data');
 const DATA_FILE = path.join(DATA_DIR, 'shared-state.json');
 const SEED_ACCOUNTS_FILE = path.join(ROOT, 'data', 'seed-accounts.json');
+const SEED_PROJECTS_FILE = path.join(ROOT, 'data', 'seed-projects.json');
 const PUBLIC_URL_FILE = path.join(DATA_DIR, 'public-base-url.txt');
 
 const APP_STATE_TABLE = 'company_chat_app_state';
@@ -131,6 +132,22 @@ function loadSeedAccountsFile() {
       accounts.push(acc);
     }
     return accounts.length ? accounts : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function loadSeedProjectsFile() {
+  try {
+    const raw = fs.readFileSync(SEED_PROJECTS_FILE, 'utf8');
+    const j = JSON.parse(raw);
+    if (!j || !Array.isArray(j.projects) || !j.projects.length) return null;
+    const out = [];
+    for (const p of j.projects) {
+      if (!p || !p.number) continue;
+      out.push({ number: String(p.number).trim(), name: p.name != null ? String(p.name).trim() : '' });
+    }
+    return out.length ? out : null;
   } catch (_) {
     return null;
   }
@@ -282,6 +299,15 @@ function ensureAccountsNonEmpty() {
   shared.accounts = seedDemoAccounts();
 }
 
+function ensureProjectsSeededIfEmpty() {
+  if (Array.isArray(shared.projects) && shared.projects.length > 0) return;
+  const seeded = loadSeedProjectsFile();
+  if (seeded && seeded.length) {
+    console.log('[H-채팅] 프로젝트 비어 있음 → data/seed-projects.json 로드 (' + seeded.length + '개)');
+    shared.projects = seeded;
+  }
+}
+
 function initFromFile() {
   const dataFileExists = fs.existsSync(DATA_FILE);
   if (!dataFileExists) {
@@ -305,6 +331,7 @@ function initFromFile() {
     saveSharedToDisk(shared);
   }
   ensureAccountsNonEmpty();
+  ensureProjectsSeededIfEmpty();
   saveSharedToDisk(shared);
 }
 
@@ -342,7 +369,9 @@ async function initFromSupabase() {
 
   shared = { ...emptyShared(), ...row };
   if (!Array.isArray(shared.accounts)) shared.accounts = [];
+  if (!Array.isArray(shared.projects)) shared.projects = [];
   ensureAccountsNonEmpty();
+  ensureProjectsSeededIfEmpty();
 }
 
 function localIPv4s() {
