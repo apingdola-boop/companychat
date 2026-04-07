@@ -288,9 +288,10 @@
     return null;
   }
 
-  function mergeTrafficExpenseMaps(base, incoming) {
+  function mergeTrafficExpenseMaps(base, incoming, resetAt) {
     const out = { ...(base && typeof base === 'object' ? base : {}) };
     if (!incoming || typeof incoming !== 'object') return out;
+    const gate = typeof resetAt === 'number' && Number.isFinite(resetAt) ? resetAt : 0;
     for (const k of Object.keys(incoming)) {
       const vb = incoming[k];
       const va = out[k];
@@ -298,12 +299,17 @@
       const ta = va && typeof va === 'object' ? Number(va.at) || 0 : 0;
       const cb = vb && typeof vb === 'object' ? !!vb.cleared : false;
       const ca = va && typeof va === 'object' ? !!va.cleared : false;
+      if (gate > 0 && tb > 0 && tb < gate) continue;
+      if (gate > 0 && ta > 0 && ta < gate) {
+        // 리셋 이전 값은 더 이상 의미가 없으므로 비교를 쉽게 하기 위해 ta를 0처럼 취급
+        // (out[k]는 아래 조건에서 vb로 덮어쓰기 될 수 있음)
+      }
       // 기기 시간차로 취소가 더 "과거"로 찍혀도, 근접한 경우(10분)는 취소 우선
       if (cb && !ca && tb > 0 && ta > 0 && ta - tb <= 10 * 60 * 1000) {
         out[k] = vb;
         continue;
       }
-      if (tb >= ta) out[k] = vb;
+      if (tb >= ta || (gate > 0 && ta > 0 && ta < gate && tb > 0)) out[k] = vb;
     }
     return out;
   }
@@ -668,7 +674,7 @@
     return {
       me: null,
       accounts: [],
-    projects: [],
+      projects: [],
       rooms: [],
       messages: {},
       feedbackThreads: [],
@@ -679,6 +685,8 @@
       staffPresenceByUser: {},
       trafficExpenseSubmittedByIvId: {},
       trafficExpenseSubmittedByIvProjectKey: {},
+      /** 교통비 제출 표시 전역 초기화 시각(ms). 이 시각 이전 기록은 무시 */
+      trafficExpenseResetAt: 0,
     };
   }
 
@@ -735,6 +743,10 @@
         !Array.isArray(data.trafficExpenseSubmittedByIvProjectKey)
           ? data.trafficExpenseSubmittedByIvProjectKey
           : {},
+      trafficExpenseResetAt:
+        typeof data.trafficExpenseResetAt === 'number' && Number.isFinite(data.trafficExpenseResetAt)
+          ? data.trafficExpenseResetAt
+          : 0,
       _migrateV1: fromV1 || (!!data.directory && !data.accounts),
     };
     if (data.directory && !base.accounts.length) base._legacyDirectory = data.directory;
@@ -971,7 +983,7 @@
   function getSharedPayload() {
     return {
       accounts: state.accounts,
-    projects: state.projects,
+      projects: state.projects,
       rooms: state.rooms,
       messages: state.messages,
       feedbackThreads: state.feedbackThreads,
@@ -982,6 +994,7 @@
       staffPresenceByUser: state.staffPresenceByUser || {},
       trafficExpenseSubmittedByIvId: state.trafficExpenseSubmittedByIvId || {},
       trafficExpenseSubmittedByIvProjectKey: state.trafficExpenseSubmittedByIvProjectKey || {},
+      trafficExpenseResetAt: typeof state.trafficExpenseResetAt === 'number' ? state.trafficExpenseResetAt : 0,
     };
   }
 
@@ -1005,8 +1018,17 @@
 
   function applySharedPayload(payload) {
     if (!payload || typeof payload !== 'object') return;
+    const incomingResetAt =
+      typeof payload.trafficExpenseResetAt === 'number' && Number.isFinite(payload.trafficExpenseResetAt)
+        ? payload.trafficExpenseResetAt
+        : 0;
+    const curResetAt =
+      typeof state.trafficExpenseResetAt === 'number' && Number.isFinite(state.trafficExpenseResetAt)
+        ? state.trafficExpenseResetAt
+        : 0;
+    state.trafficExpenseResetAt = Math.max(curResetAt, incomingResetAt);
     state.accounts = Array.isArray(payload.accounts) ? payload.accounts : [];
-  state.projects = Array.isArray(payload.projects) ? payload.projects : [];
+    state.projects = Array.isArray(payload.projects) ? payload.projects : [];
     state.rooms = Array.isArray(payload.rooms) ? payload.rooms : [];
     state.messages = payload.messages && typeof payload.messages === 'object' ? payload.messages : {};
     state.feedbackThreads = Array.isArray(payload.feedbackThreads) ? payload.feedbackThreads : [];
@@ -1024,7 +1046,8 @@
     if (payload.trafficExpenseSubmittedByIvId && typeof payload.trafficExpenseSubmittedByIvId === 'object') {
       state.trafficExpenseSubmittedByIvId = mergeTrafficExpenseMaps(
         state.trafficExpenseSubmittedByIvId,
-        payload.trafficExpenseSubmittedByIvId
+        payload.trafficExpenseSubmittedByIvId,
+        state.trafficExpenseResetAt
       );
     } else if (!state.trafficExpenseSubmittedByIvId) {
       state.trafficExpenseSubmittedByIvId = {};
@@ -1035,7 +1058,7 @@
       for (const ivId of Object.keys(payload.trafficExpenseSubmittedByIvProjectKey)) {
         const cur = state.trafficExpenseSubmittedByIvProjectKey[ivId];
         const inc = payload.trafficExpenseSubmittedByIvProjectKey[ivId];
-        state.trafficExpenseSubmittedByIvProjectKey[ivId] = mergeTrafficExpenseMaps(cur, inc);
+        state.trafficExpenseSubmittedByIvProjectKey[ivId] = mergeTrafficExpenseMaps(cur, inc, state.trafficExpenseResetAt);
       }
     } else if (!state.trafficExpenseSubmittedByIvProjectKey) {
       state.trafficExpenseSubmittedByIvProjectKey = {};
@@ -1152,7 +1175,7 @@
       const persist = {
         me: state.me,
         accounts: state.accounts,
-      projects: state.projects,
+        projects: state.projects,
         rooms: state.rooms,
         messages: state.messages,
         feedbackThreads: state.feedbackThreads,
@@ -1163,6 +1186,7 @@
         staffPresenceByUser: state.staffPresenceByUser || {},
         trafficExpenseSubmittedByIvId: state.trafficExpenseSubmittedByIvId || {},
         trafficExpenseSubmittedByIvProjectKey: state.trafficExpenseSubmittedByIvProjectKey || {},
+        trafficExpenseResetAt: typeof state.trafficExpenseResetAt === 'number' ? state.trafficExpenseResetAt : 0,
       };
       localStorage.setItem(STORAGE_V2, JSON.stringify(persist));
       if (localStorage.getItem(STORAGE_V1)) localStorage.removeItem(STORAGE_V1);
@@ -1170,6 +1194,15 @@
         realtimeSocket.emit('shared:update', getSharedPayload());
       }
     } catch (_) {}
+  }
+
+  function resetAllTrafficExpenseSubmissions() {
+    state.trafficExpenseResetAt = Date.now();
+    state.trafficExpenseSubmittedByIvId = {};
+    state.trafficExpenseSubmittedByIvProjectKey = {};
+    saveState();
+    showToast('교통비 제출 표시를 전체 초기화했습니다.');
+    if (view.screen === 'main' && view.tab === 'traffic') render();
   }
 
   function formatTime(ts) {
@@ -2352,11 +2385,41 @@
     if (ev.key !== STORAGE_V2 || !ev.newValue || ev.storageArea !== localStorage) return;
     try {
       const data = JSON.parse(ev.newValue);
-      const incoming = data.trafficExpenseSubmittedByIvId;
-      if (!incoming || typeof incoming !== 'object') return;
-      const merged = mergeTrafficExpenseMaps(state.trafficExpenseSubmittedByIvId, incoming);
-      if (JSON.stringify(state.trafficExpenseSubmittedByIvId || {}) === JSON.stringify(merged)) return;
-      state.trafficExpenseSubmittedByIvId = merged;
+      const incomingResetAt =
+        typeof data.trafficExpenseResetAt === 'number' && Number.isFinite(data.trafficExpenseResetAt) ? data.trafficExpenseResetAt : 0;
+      const curResetAt =
+        typeof state.trafficExpenseResetAt === 'number' && Number.isFinite(state.trafficExpenseResetAt)
+          ? state.trafficExpenseResetAt
+          : 0;
+      state.trafficExpenseResetAt = Math.max(curResetAt, incomingResetAt);
+
+      const incFlat = data.trafficExpenseSubmittedByIvId;
+      const incProj = data.trafficExpenseSubmittedByIvProjectKey;
+      let changed = false;
+
+      if (incFlat && typeof incFlat === 'object') {
+        const merged = mergeTrafficExpenseMaps(state.trafficExpenseSubmittedByIvId, incFlat, state.trafficExpenseResetAt);
+        if (JSON.stringify(state.trafficExpenseSubmittedByIvId || {}) !== JSON.stringify(merged)) {
+          state.trafficExpenseSubmittedByIvId = merged;
+          changed = true;
+        }
+      }
+
+      if (incProj && typeof incProj === 'object') {
+        if (!state.trafficExpenseSubmittedByIvProjectKey || typeof state.trafficExpenseSubmittedByIvProjectKey !== 'object')
+          state.trafficExpenseSubmittedByIvProjectKey = {};
+        for (const ivId of Object.keys(incProj)) {
+          const cur = state.trafficExpenseSubmittedByIvProjectKey[ivId];
+          const inc = incProj[ivId];
+          const merged = mergeTrafficExpenseMaps(cur, inc, state.trafficExpenseResetAt);
+          if (JSON.stringify(cur || {}) !== JSON.stringify(merged)) {
+            state.trafficExpenseSubmittedByIvProjectKey[ivId] = merged;
+            changed = true;
+          }
+        }
+      }
+
+      if (!changed && incomingResetAt <= curResetAt) return;
       if (view.screen === 'main' && view.tab === 'traffic') render();
     } catch (_) {}
   }
@@ -2435,6 +2498,15 @@
         continue;
       }
       const at = row.created_at ? Date.parse(row.created_at) : 0;
+      if (
+        typeof state.trafficExpenseResetAt === 'number' &&
+        state.trafficExpenseResetAt > 0 &&
+        at > 0 &&
+        at < state.trafficExpenseResetAt
+      ) {
+        rememberTrafficBridgeRowId(row.id);
+        continue;
+      }
       const opts = {
         source: (p.source || 'route-calc') + '+supabase',
         files: p.files || null,
@@ -2643,6 +2715,11 @@
           <div class="traffic-tool-bar">
             <button type="button" class="btn btn-secondary traffic-tool-open-newtab" id="traffic-tool-open-newtab">새 탭에서 전체 화면으로 열기</button>
             <a class="btn btn-ghost traffic-tool-open-href" href="${esc}" target="_blank" rel="noopener noreferrer">새 탭(링크만)</a>
+            ${
+              me && (me.role === 'researcher' || me.role === 'supervisor')
+                ? `<button type="button" class="btn btn-ghost" id="traffic-reset-all">교통비 제출 전체 삭제</button>`
+                : ''
+            }
           </div>
           <p class="caption traffic-tool-note">연동을 쓰려면 위 <strong>버튼</strong>으로 여세요(오른쪽 링크는 보안상 opener가 없을 수 있습니다). iframe이 비면 버튼으로 새 탭을 이용해 주세요.</p>
           <div class="traffic-iframe-wrap">
@@ -3302,6 +3379,12 @@
     if (view.tab === 'traffic' && (state.me.role === 'supervisor' || state.me.role === 'interviewer')) {
       document.getElementById('traffic-tool-open-newtab')?.addEventListener('click', () => {
         window.open(TRAFFIC_TOOL_URL, '_blank');
+      });
+      document.getElementById('traffic-reset-all')?.addEventListener('click', () => {
+        if (!state.me || !(state.me.role === 'supervisor' || state.me.role === 'researcher')) return;
+        const ok = window.confirm('교통비 제출 표시를 전부 삭제할까요? (되돌릴 수 없습니다)');
+        if (!ok) return;
+        resetAllTrafficExpenseSubmissions();
       });
       bindTrafficExpenseFilters();
       document.querySelectorAll('.traffic-submit-toggle').forEach((btn) => {

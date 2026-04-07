@@ -61,12 +61,15 @@ function emptyShared() {
     trafficExpenseSubmittedByIvId: {},
     /** 면접원 account id → (프로젝트 key → { at, source?, manual?, cleared?, files?, summary? }) */
     trafficExpenseSubmittedByIvProjectKey: {},
+    /** 교통비 제출 표시 전역 초기화 시각(ms). 이 시각 이전 기록은 무시 */
+    trafficExpenseResetAt: 0,
   };
 }
 
-function mergeTrafficExpenseMaps(base, incoming) {
+function mergeTrafficExpenseMaps(base, incoming, resetAt) {
   const out = { ...(base && typeof base === 'object' ? base : {}) };
   if (!incoming || typeof incoming !== 'object') return out;
+  const gate = typeof resetAt === 'number' && Number.isFinite(resetAt) ? resetAt : 0;
   for (const k of Object.keys(incoming)) {
     const vb = incoming[k];
     const va = out[k];
@@ -74,6 +77,7 @@ function mergeTrafficExpenseMaps(base, incoming) {
     const ta = va && typeof va === 'object' ? Number(va.at) || 0 : 0;
     const cb = vb && typeof vb === 'object' ? !!vb.cleared : false;
     const ca = va && typeof va === 'object' ? !!va.cleared : false;
+    if (gate > 0 && tb > 0 && tb < gate) continue;
     // 기기 시간차로 취소가 더 "과거"로 찍혀도, 근접한 경우(10분)는 취소 우선
     if (cb && !ca && tb > 0 && ta > 0 && ta - tb <= 10 * 60 * 1000) {
       out[k] = vb;
@@ -84,13 +88,13 @@ function mergeTrafficExpenseMaps(base, incoming) {
   return out;
 }
 
-function mergeTrafficExpenseProjectMaps(base, incoming) {
+function mergeTrafficExpenseProjectMaps(base, incoming, resetAt) {
   const out = { ...(base && typeof base === 'object' ? base : {}) };
   if (!incoming || typeof incoming !== 'object') return out;
   for (const ivId of Object.keys(incoming)) {
     const cur = out[ivId] && typeof out[ivId] === 'object' ? out[ivId] : {};
     const inc = incoming[ivId] && typeof incoming[ivId] === 'object' ? incoming[ivId] : {};
-    out[ivId] = mergeTrafficExpenseMaps(cur, inc);
+    out[ivId] = mergeTrafficExpenseMaps(cur, inc, resetAt);
   }
   return out;
 }
@@ -240,6 +244,12 @@ function mergeMessageMaps(serverMsgs, clientMsgs) {
 
 function mergeSharedUpdate(payload) {
   if (!payload || typeof payload !== 'object') return;
+  const incomingResetAt =
+    typeof payload.trafficExpenseResetAt === 'number' && Number.isFinite(payload.trafficExpenseResetAt)
+      ? payload.trafficExpenseResetAt
+      : 0;
+  const curResetAt = typeof shared.trafficExpenseResetAt === 'number' && Number.isFinite(shared.trafficExpenseResetAt) ? shared.trafficExpenseResetAt : 0;
+  const nextResetAt = Math.max(curResetAt, incomingResetAt);
   shared = {
     ...shared,
     accounts: Array.isArray(payload.accounts) ? payload.accounts : shared.accounts,
@@ -268,16 +278,14 @@ function mergeSharedUpdate(payload) {
       payload.staffPresenceByUser && typeof payload.staffPresenceByUser === 'object'
         ? payload.staffPresenceByUser
         : shared.staffPresenceByUser,
+    trafficExpenseResetAt: nextResetAt,
     trafficExpenseSubmittedByIvId:
       payload.trafficExpenseSubmittedByIvId && typeof payload.trafficExpenseSubmittedByIvId === 'object'
-        ? mergeTrafficExpenseMaps(shared.trafficExpenseSubmittedByIvId, payload.trafficExpenseSubmittedByIvId)
+        ? mergeTrafficExpenseMaps(shared.trafficExpenseSubmittedByIvId, payload.trafficExpenseSubmittedByIvId, nextResetAt)
         : shared.trafficExpenseSubmittedByIvId,
     trafficExpenseSubmittedByIvProjectKey:
       payload.trafficExpenseSubmittedByIvProjectKey && typeof payload.trafficExpenseSubmittedByIvProjectKey === 'object'
-        ? mergeTrafficExpenseProjectMaps(
-            shared.trafficExpenseSubmittedByIvProjectKey,
-            payload.trafficExpenseSubmittedByIvProjectKey
-          )
+        ? mergeTrafficExpenseProjectMaps(shared.trafficExpenseSubmittedByIvProjectKey, payload.trafficExpenseSubmittedByIvProjectKey, nextResetAt)
         : shared.trafficExpenseSubmittedByIvProjectKey,
   };
 }
