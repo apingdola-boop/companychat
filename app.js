@@ -3735,6 +3735,30 @@
     showToast(`프로젝트 ${added}개를 추가했습니다.`);
   }
 
+  let projectsSeedFetchPromise = null;
+  async function ensureProjectsCatalogLoaded() {
+    if (Array.isArray(state.projects) && state.projects.length) return true;
+    if (projectsSeedFetchPromise) return projectsSeedFetchPromise;
+    projectsSeedFetchPromise = (async () => {
+      try {
+        const res = await fetch('data/seed-projects.json', { cache: 'no-store' });
+        if (!res.ok) return false;
+        const j = await res.json();
+        const list = j && Array.isArray(j.projects) ? j.projects : [];
+        if (!list.length) return false;
+        state.projects = list
+          .filter((p) => p && p.number)
+          .map((p) => ({ number: String(p.number).trim(), name: p.name != null ? String(p.name).trim() : '' }))
+          .sort((a, b) => String(a.number).localeCompare(String(b.number)));
+        saveState();
+        return true;
+      } catch (_) {
+        return false;
+      }
+    })();
+    return projectsSeedFetchPromise;
+  }
+
   function openNewChatModal() {
     const others = state.accounts.filter((u) => u.id !== state.me.id);
     const overlay = document.createElement('div');
@@ -3903,12 +3927,15 @@
       render();
     });
 
-    function renderProjectSearchResults() {
+    async function renderProjectSearchResults() {
       if (!projResults || !projSearchIn) return;
       const q = (projSearchIn.value || '').trim().toLowerCase();
       if (!q) {
         projResults.innerHTML = '';
         return;
+      }
+      if (!Array.isArray(state.projects) || state.projects.length === 0) {
+        await ensureProjectsCatalogLoaded();
       }
       const list = Array.isArray(state.projects) ? state.projects : [];
       const hits = list
@@ -3932,7 +3959,9 @@
         .join('');
     }
 
-    projSearchIn?.addEventListener('input', renderProjectSearchResults);
+    projSearchIn?.addEventListener('input', () => {
+      renderProjectSearchResults();
+    });
     projResults?.addEventListener('click', (e) => {
       const btn = e.target && e.target.closest ? e.target.closest('[data-proj-pick]') : null;
       if (!btn) return;
