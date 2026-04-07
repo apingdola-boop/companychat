@@ -2203,18 +2203,20 @@
     const pn = p && p.projectNumber != null ? String(p.projectNumber).trim() : '';
     const pname = p && p.projectName != null ? String(p.projectName).trim() : '';
     if (pn) {
-      const room = state.rooms.find((r) => r && r.type === 'group' && String(r.projectNumber || '').trim() === pn);
-      if (room && room.id) return String(room.id);
+      const hits = state.rooms.filter(
+        (r) => r && r.type === 'group' && String(r.projectNumber || '').trim() === pn
+      );
+      if (hits.length === 1 && hits[0].id) return String(hits[0].id);
+      // 같은 프로젝트 번호 단체방이 여러 개면 잘못 찍히는 것보다 "기록 안 함"이 안전
+      if (hits.length > 1) return 'ambiguous:' + pn;
     }
     if (pname) {
       const room = state.rooms.find((r) => r && r.type === 'group' && String(r.name || '').trim() === pname);
       if (room && room.id) return String(room.id);
     }
     if (pn) {
-      const room = state.rooms.find(
-        (r) => r && r.type === 'group' && String(r.name || '').includes(pn)
-      );
-      if (room && room.id) return String(room.id);
+      // 번호로는 반드시 projectNumber 필드로만 매칭 (문자열 포함 매칭은 오탐 위험)
+      return 'unmatched:' + pn;
     }
     if (pname) return 'name:' + pname;
     if (pn) return 'num:' + pn;
@@ -2324,6 +2326,10 @@
       summary: data.summary || null,
     };
     const projectKey = guessProjectKeyForTrafficPayload(data);
+    if (projectKey && (projectKey.startsWith('ambiguous:') || projectKey.startsWith('unmatched:'))) {
+      showToast('프로젝트 번호 매칭 실패(중복/미설정). 단체방의 프로젝트 번호를 확인해 주세요.');
+      return;
+    }
     const okProject = projectKey
       ? markTrafficExpenseSubmittedForIvProjectKey(acc.id, projectKey, { ...opts, manual: false })
       : false;
