@@ -185,6 +185,56 @@
   /** iframe postMessage 출처 검증 (경로만 다를 뿐 origin 동일) */
   const TRAFFIC_TOOL_ORIGIN = 'https://apingdola-boop.github.io';
 
+  function trafficToolPageOrigin() {
+    try {
+      return new URL(TRAFFIC_TOOL_URL).origin;
+    } catch (_) {
+      return TRAFFIC_TOOL_ORIGIN;
+    }
+  }
+
+  /** 유류비 도구(iframe)에서 온 postMessage만 허용. 로컬에서 도구를 띄운 경우 localhost도 허용. */
+  function trafficPostMessageOriginAllowed(origin) {
+    if (!origin || typeof origin !== 'string') return false;
+    if (origin === TRAFFIC_TOOL_ORIGIN || origin === trafficToolPageOrigin()) return true;
+    if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin)) return true;
+    try {
+      const extra = String(localStorage.getItem('company-chat-traffic-tool-origins') || '')
+        .split(/[,;\s]+/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (extra.includes(origin)) return true;
+    } catch (_) {}
+    return false;
+  }
+
+  /** postMessage 페이로드로 면접원 계정 찾기 (loginId / ivId / accountId 등) */
+  function findInterviewerForTrafficMessage(data) {
+    if (!data || typeof data !== 'object') return null;
+    const accounts = state.accounts.filter((a) => a.role === 'interviewer');
+    if (!accounts.length) return null;
+    const lidRaw = data.loginId != null ? String(data.loginId).trim() : '';
+    if (lidRaw) {
+      const lower = lidRaw.toLowerCase().replace(/\s/g, '');
+      let acc = accounts.find((a) => String(a.loginId).trim() === lidRaw);
+      if (!acc) acc = accounts.find((a) => String(a.loginId).trim().toLowerCase().replace(/\s/g, '') === lower);
+      if (acc) return acc;
+    }
+    const idRaw =
+      data.ivId != null
+        ? String(data.ivId).trim()
+        : data.accountId != null
+          ? String(data.accountId).trim()
+          : data.interviewerId != null
+            ? String(data.interviewerId).trim()
+            : '';
+    if (idRaw) {
+      const acc = accounts.find((a) => String(a.id).trim() === idRaw);
+      if (acc) return acc;
+    }
+    return null;
+  }
+
   function mergeTrafficExpenseMaps(base, incoming) {
     const out = { ...(base && typeof base === 'object' ? base : {}) };
     if (!incoming || typeof incoming !== 'object') return out;
@@ -633,6 +683,8 @@
     devBulkSelectedIds: [],
     /** 개발자 모드: 검색창 입력 유지용 */
     devBulkSearchDraft: '',
+    /** 교통비 현황표: 검색·팀·프로젝트(단체방) 필터 */
+    trafficListFilter: { q: '', team: '', roomId: '' },
   };
 
   /** 개발자 모드: 면접원 계정 id → 첨부 예정 사진(data URL). 탭을 벗어나면 비움. */
@@ -2058,35 +2110,52 @@
   }
 
   function markTrafficExpenseSubmittedByLoginId(loginId, opts) {
-    const lid = String(loginId || '').trim();
-    if (!lid) return false;
-    const acc = state.accounts.find((a) => a.role === 'interviewer' && String(a.loginId) === lid);
+    const acc = findInterviewerForTrafficMessage({ loginId });
     if (!acc) return false;
     const source = typeof opts === 'string' ? opts : (opts && opts.source) || 'postMessage';
-    return markTrafficExpenseSubmittedForIv(acc.id, { 
-      source: source, 
+    return markTrafficExpenseSubmittedForIv(acc.id, {
+      source: source,
       manual: false,
       files: opts && opts.files,
-      summary: opts && opts.summary
+      summary: opts && opts.summary,
     });
   }
 
   function onTrafficToolPostMessage(ev) {
-    if (ev.origin !== TRAFFIC_TOOL_ORIGIN) return;
-    const data = ev.data;
+    if (!trafficPostMessageOriginAllowed(ev.origin)) {
+      try {
+        if (localStorage.getItem('company-chat-debug-traffic') === '1')
+          console.warn('[traffic] postMessage 출처 거부:', ev.origin, ev.data);
+      } catch (_) {}
+      return;
+    }
+    let data = ev.data;
+    if (typeof data === 'string') {
+      try {
+        data = JSON.parse(data);
+      } catch (_) {
+        return;
+      }
+    }
     if (!data || typeof data !== 'object') return;
     if (data.type !== 'companychat-traffic-submitted') return;
     if (!state.me) return;
-    const loginId = data.loginId != null ? String(data.loginId).trim() : '';
-    if (!loginId) return;
+    const acc = findInterviewerForTrafficMessage(data);
+    if (!acc) {
+      try {
+        if (localStorage.getItem('company-chat-debug-traffic') === '1')
+          console.warn('[traffic] 면접원 매칭 실패. payload:', JSON.stringify(data));
+      } catch (_) {}
+      return;
+    }
     const opts = {
       source: data.source || 'route-calc',
       files: data.files || null,
-      summary: data.summary || null
+      summary: data.summary || null,
     };
-    if (markTrafficExpenseSubmittedByLoginId(loginId, opts)) {
+    if (markTrafficExpenseSubmittedForIv(acc.id, { ...opts, manual: false })) {
       saveState();
-      showToast('교통비 제출로 기록했습니다: ' + loginId);
+      showToast('교통비 제출로 기록했습니다: ' + acc.name + ' (@' + acc.loginId + ')');
       if (view.screen === 'main' && view.tab === 'traffic') render();
     }
   }
@@ -2105,48 +2174,100 @@
       state.trafficExpenseSubmittedByIvId && typeof state.trafficExpenseSubmittedByIvId === 'object'
         ? state.trafficExpenseSubmittedByIvId
         : {};
-    const ivs = state.accounts
-      .filter((x) => x.role === 'interviewer')
+    if (!view.trafficListFilter || typeof view.trafficListFilter !== 'object')
+      view.trafficListFilter = { q: '', team: '', roomId: '' };
+    const fil = view.trafficListFilter;
+
+    const ivsAll = state.accounts.filter((x) => x.role === 'interviewer');
+    const teamKeySet = new Set(ivsAll.map((iv) => (iv.team && TEAMS[iv.team] ? iv.team : '_other')));
+    const teamKeysOrdered = [...teamKeySet].sort((a, b) => {
+      if (a === '_other') return 1;
+      if (b === '_other') return -1;
+      const ia = TEAM_ORDER.indexOf(a);
+      const ib = TEAM_ORDER.indexOf(b);
+      if (ia === -1 && ib === -1) return String(a).localeCompare(String(b), 'ko');
+      if (ia === -1) return 1;
+      if (ib === -1) return -1;
+      return ia - ib;
+    });
+    const projectRooms = [...state.rooms]
+      .filter(
+        (r) =>
+          r.type === 'group' &&
+          Array.isArray(r.memberIds) &&
+          r.memberIds.some((mid) => state.accounts.some((aa) => aa.id === mid && aa.role === 'interviewer'))
+      )
       .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'ko'));
+    const roomOpts = [
+      '<option value="">' + escapeHtml('전체 프로젝트 (단체방)') + '</option>',
+      ...projectRooms.map((r) => {
+        const sel = fil.roomId === r.id ? ' selected' : '';
+        return `<option value="${escapeHtml(r.id)}"${sel}>${escapeHtml(r.name || '이름 없음')}</option>`;
+      }),
+    ].join('');
+    const teamOpts = [
+      '<option value="">' + escapeHtml('전체 팀') + '</option>',
+      ...teamKeysOrdered.map((tk) => {
+        const label = tk === '_other' ? '팀 미지정 · 기타' : TEAMS[tk] || tk;
+        const sel = fil.team === tk ? ' selected' : '';
+        return `<option value="${escapeHtml(tk)}"${sel}>${escapeHtml(label)}</option>`;
+      }),
+    ].join('');
+
     const canToggleRow = (urow) =>
       me.role === 'supervisor' || (me.role === 'interviewer' && me.id === urow.id);
-    const rows = ivs
-      .map((uv) => {
-        const rec = subs[uv.id];
-        const at = rec && rec.at ? Number(rec.at) : 0;
-        const submitted = at > 0;
-        const status = submitted
-          ? `<span class="traffic-cell-status traffic-cell-status--ok">제출 완료 · ${escapeHtml(formatTime(at))}</span>`
-          : `<span class="traffic-cell-status traffic-cell-status--no">미제출</span>`;
-        
-        // 파일 다운로드 버튼 생성
-        let fileButtons = '';
-        if (submitted && rec.files) {
-          if (rec.files.excel) {
-            fileButtons += `<a href="${escapeHtml(rec.files.excel)}" target="_blank" class="btn btn-ghost traffic-file-btn" title="엑셀 다운로드">📊</a>`;
-          }
-          if (rec.files.images) {
-            const imgKeys = Object.keys(rec.files.images);
-            imgKeys.forEach((key) => {
-              const label = key === 'toll' ? '통행료' : key === 'meal' ? '식비' : '기타';
-              fileButtons += `<a href="${escapeHtml(rec.files.images[key])}" target="_blank" class="btn btn-ghost traffic-file-btn" title="${label} 영수증">🧾</a>`;
-            });
-          }
+
+    function oneRow(uv) {
+      const rec = subs[uv.id];
+      const at = rec && rec.at ? Number(rec.at) : 0;
+      const submitted = at > 0;
+      const status = submitted
+        ? `<span class="traffic-cell-status traffic-cell-status--ok">제출 완료 · ${escapeHtml(formatTime(at))}</span>`
+        : `<span class="traffic-cell-status traffic-cell-status--no">미제출</span>`;
+
+      let fileButtons = '';
+      if (submitted && rec.files) {
+        if (rec.files.excel) {
+          fileButtons += `<a href="${escapeHtml(rec.files.excel)}" target="_blank" class="btn btn-ghost traffic-file-btn" title="엑셀 다운로드">📊</a>`;
         }
-        
-        // 요약 정보 툴팁
-        let summaryInfo = '';
-        if (submitted && rec.summary) {
-          const cost = rec.summary.totalCost ? Number(rec.summary.totalCost).toLocaleString() + '원' : '';
-          summaryInfo = cost ? ` <span class="traffic-summary-cost">(${cost})</span>` : '';
+        if (rec.files.images) {
+          const imgKeys = Object.keys(rec.files.images);
+          imgKeys.forEach((key) => {
+            const label = key === 'toll' ? '통행료' : key === 'meal' ? '식비' : '기타';
+            fileButtons += `<a href="${escapeHtml(rec.files.images[key])}" target="_blank" class="btn btn-ghost traffic-file-btn" title="${label} 영수증">🧾</a>`;
+          });
         }
-        
-        const actions = canToggleRow(uv)
-          ? submitted
-            ? `<button type="button" class="btn btn-ghost traffic-submit-toggle" data-iv-id="${escapeHtml(uv.id)}" data-action="clear">표시 취소</button>`
-            : `<button type="button" class="btn btn-secondary traffic-submit-toggle" data-iv-id="${escapeHtml(uv.id)}" data-action="set">제출 표시</button>`
-          : '—';
-        return `<tr>
+      }
+
+      let summaryInfo = '';
+      if (submitted && rec.summary) {
+        const cost = rec.summary.totalCost ? Number(rec.summary.totalCost).toLocaleString() + '원' : '';
+        summaryInfo = cost ? ` <span class="traffic-summary-cost">(${cost})</span>` : '';
+      }
+
+      const actions = canToggleRow(uv)
+        ? submitted
+          ? `<button type="button" class="btn btn-ghost traffic-submit-toggle" data-iv-id="${escapeHtml(uv.id)}" data-action="clear">표시 취소</button>`
+          : `<button type="button" class="btn btn-secondary traffic-submit-toggle" data-iv-id="${escapeHtml(uv.id)}" data-action="set">제출 표시</button>`
+        : '—';
+
+      const tk = uv.team && TEAMS[uv.team] ? uv.team : '_other';
+      const roomIdList = state.rooms
+        .filter((r) => r.type === 'group' && r.memberIds && r.memberIds.includes(uv.id))
+        .map((r) => r.id)
+        .join(',');
+      const roomNames = state.rooms
+        .filter((r) => r.type === 'group' && r.memberIds && r.memberIds.includes(uv.id))
+        .map((r) => r.name || '');
+      const searchHay = [String(uv.loginId || ''), String(uv.name || ''), teamLabel(uv.team) || '', ...roomNames]
+        .join(' ')
+        .toLowerCase();
+
+      return `<tr class="traffic-iv-row" data-iv-id="${escapeHtml(uv.id)}" data-team-key="${escapeHtml(
+        tk
+      )}" data-room-ids="${escapeHtml(roomIdList)}" data-search="${escapeHtml(searchHay)}" data-submitted="${
+        submitted ? '1' : '0'
+      }">
           <td class="traffic-cell-id"><code>${escapeHtml(String(uv.loginId))}</code></td>
           <td>${escapeHtml(uv.name)}</td>
           <td>${escapeHtml(teamLabel(uv.team) || '—')}</td>
@@ -2154,16 +2275,42 @@
           <td class="traffic-cell-files">${fileButtons || '—'}</td>
           <td class="traffic-cell-actions">${actions}</td>
         </tr>`;
-      })
-      .join('');
-    const tableBody = rows || '<tr><td colspan="6" class="traffic-cell-empty">등록된 면접원이 없습니다.</td></tr>';
+    }
+
+    let rows = '';
+    if (ivsAll.length === 0) {
+      rows = '<tr><td colspan="6" class="traffic-cell-empty">등록된 면접원이 없습니다.</td></tr>';
+    } else {
+      for (const tk of teamKeysOrdered) {
+        const label = tk === '_other' ? '팀 미지정 · 기타' : TEAMS[tk] || tk;
+        const ivs = ivsAll
+          .filter((iv) => (iv.team && TEAMS[iv.team] ? iv.team : '_other') === tk)
+          .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'ko'));
+        if (ivs.length === 0) continue;
+        rows += `<tr class="traffic-team-subhead" data-team-key="${escapeHtml(tk)}"><td colspan="6" class="traffic-team-subhead-cell"><span class="traffic-team-subhead-title">${escapeHtml(
+          label
+        )}</span><span class="caption traffic-team-subhead-meta"> · ${ivs.length}명</span></td></tr>`;
+        for (const uv of ivs) rows += oneRow(uv);
+      }
+      if (!rows) rows = '<tr><td colspan="6" class="traffic-cell-empty">등록된 면접원이 없습니다.</td></tr>';
+    }
     const parentOriginEsc = escapeHtml(window.location.origin || '');
+    const filterQEsc = escapeHtml(fil.q || '');
     return `
       <div class="traffic-tool-tab feedback-tab">
         <h2 class="feedback-heading">교통비 · 거리 계산</h2>
-        <p class="caption">아래 표는 <strong>교통비 제출 여부</strong>만 모읍니다. 메일로 보낸 엑셀·첨부 파일은 이 앱 서버에 자동 저장되지 않습니다. ROUTE CALC에서 전송 후 연동 코드를 넣으면 여기에 자동으로 제출 표시가 됩니다.</p>
+        <p class="caption">아래 표는 <strong>교통비 제출 여부</strong>를 보여 줍니다. ROUTE CALC를 <strong>이 페이지 안 iframe</strong>에서 연 뒤 전송해야 <code>postMessage</code> 가 companychat으로 옵니다. 새 탭에서만 쓰면 부모 창이 없어 표가 갱신되지 않습니다.</p>
         <div class="traffic-expense-sheet-wrap">
           <h3 class="traffic-sheet-title">면접원 교통비 제출 현황</h3>
+          <div class="traffic-table-toolbar">
+            <label class="traffic-filter-field"><span class="traffic-filter-label">검색</span>
+              <input type="search" id="traffic-filter-q" class="traffic-filter-input" placeholder="이름, 아이디, 팀, 프로젝트명" autocomplete="off" value="${filterQEsc}" /></label>
+            <label class="traffic-filter-field"><span class="traffic-filter-label">팀</span>
+              <select id="traffic-filter-team" class="traffic-filter-select">${teamOpts}</select></label>
+            <label class="traffic-filter-field traffic-filter-field--grow"><span class="traffic-filter-label">프로젝트 (단체방)</span>
+              <select id="traffic-filter-room" class="traffic-filter-select">${roomOpts}</select></label>
+          </div>
+          <p id="traffic-filter-stats" class="traffic-filter-stats" aria-live="polite"></p>
           <div class="traffic-expense-table-scroll">
             <table class="traffic-expense-grid">
               <thead>
@@ -2176,20 +2323,24 @@
                   <th scope="col">수동</th>
                 </tr>
               </thead>
-              <tbody>${tableBody}</tbody>
+              <tbody>${rows}</tbody>
             </table>
           </div>
         </div>
         <details class="traffic-integration-details">
           <summary>ROUTE CALC에서 자동으로 「제출」 표시하기</summary>
-          <p class="caption">GitHub Pages <a href="${esc}" target="_blank" rel="noopener noreferrer">trafficservice</a> 쪽에서 「자동 이메일 전송」 성공 직후 다음을 실행하세요. <code>loginId</code>는 전송한 면접원의 로그인 아이디(문자열)로 바꿉니다.</p>
+          <p class="caption">GitHub Pages <a href="${esc}" target="_blank" rel="noopener noreferrer">trafficservice</a> 에서 「자동 이메일 전송」 성공 직후 아래를 실행하세요. <code>loginId</code>는 companychat <strong>로그인 아이디</strong>와 같아야 합니다. 내부 계정 id는 <code>ivId</code> 로 보낼 수 있습니다.</p>
           <pre class="traffic-code-sample">if (window.parent !== window) {
   window.parent.postMessage(
-    { type: 'companychat-traffic-submitted', loginId: '여기에면접원아이디' },
+    {
+      type: 'companychat-traffic-submitted',
+      loginId: '면접원로그인아이디',
+      // ivId: 'companychat_내부계정id'
+    },
     '${parentOriginEsc}'
   );
 }</pre>
-          <p class="caption">이 앱 주소가 <code>${parentOriginEsc}</code> 가 아니면(로컬 등) 위 두 번째 인자를 그 출처에 맞게 수정하세요.</p>
+          <p class="caption">companychat 주소가 <code>${parentOriginEsc}</code> 가 아니면 두 번째 인자를 그 출처로 맞추세요. 도구를 다른 도메인에 올렸다면 콘솔에서 <code>localStorage.setItem('company-chat-traffic-tool-origins','https://그origin')</code> 후 새로고침. 디버그: <code>localStorage.setItem('company-chat-debug-traffic','1')</code></p>
         </details>
         <div class="traffic-tool-bar">
           <a class="btn btn-secondary traffic-tool-open" href="${esc}" target="_blank" rel="noopener noreferrer">새 탭에서 전체 화면으로 열기</a>
@@ -2200,6 +2351,74 @@
         <p class="caption traffic-tool-note">일부 브라우저에서는 아래 창이 비어 보일 수 있습니다. 그때는 위 버튼으로 새 탭에서 이용해 주세요.</p>
         <p class="caption traffic-tool-credit">도구 페이지: <a href="${esc}" target="_blank" rel="noopener noreferrer">apingdola-boop.github.io/trafficservice.github.io</a></p>
       </div>`;
+  }
+
+  function applyTrafficExpenseFilters() {
+    const tbody = document.querySelector('.traffic-expense-grid tbody');
+    if (!tbody) return;
+    const q = (view.trafficListFilter && view.trafficListFilter.q ? view.trafficListFilter.q : '')
+      .trim()
+      .toLowerCase();
+    const team = (view.trafficListFilter && view.trafficListFilter.team) || '';
+    const roomId = (view.trafficListFilter && view.trafficListFilter.roomId) || '';
+    const ivRows = tbody.querySelectorAll('tr.traffic-iv-row');
+    let sub = 0;
+    let tot = 0;
+    ivRows.forEach((tr) => {
+      const tid = tr.getAttribute('data-team-key') || '';
+      const rooms = (tr.getAttribute('data-room-ids') || '').split(',').filter(Boolean);
+      const hay = (tr.getAttribute('data-search') || '').toLowerCase();
+      let show = true;
+      if (q && !hay.includes(q)) show = false;
+      if (team && tid !== team) show = false;
+      if (roomId && !rooms.includes(roomId)) show = false;
+      tr.style.display = show ? '' : 'none';
+      if (show) {
+        tot++;
+        if (tr.getAttribute('data-submitted') === '1') sub++;
+      }
+    });
+    tbody.querySelectorAll('tr.traffic-team-subhead').forEach((th) => {
+      const tk = th.getAttribute('data-team-key');
+      if (!tk) return;
+      const any = [...ivRows].some(
+        (tr) => tr.getAttribute('data-team-key') === tk && tr.style.display !== 'none'
+      );
+      th.style.display = any ? '' : 'none';
+    });
+    const statsEl = document.getElementById('traffic-filter-stats');
+    if (statsEl) {
+      const pend = tot - sub;
+      statsEl.innerHTML = `필터 결과 <strong>${tot}명</strong> · 제출 <strong class="traffic-stat-ok">${sub}명</strong> · 미제출 <strong class="traffic-stat-no">${pend}명</strong>`;
+    }
+  }
+
+  function bindTrafficExpenseFilters() {
+    const qEl = document.getElementById('traffic-filter-q');
+    const teamEl = document.getElementById('traffic-filter-team');
+    const roomEl = document.getElementById('traffic-filter-room');
+    if (!qEl || !teamEl || !roomEl) return;
+    if (!view.trafficListFilter || typeof view.trafficListFilter !== 'object')
+      view.trafficListFilter = { q: '', team: '', roomId: '' };
+    qEl.value = view.trafficListFilter.q || '';
+    teamEl.value = view.trafficListFilter.team || '';
+    roomEl.value = view.trafficListFilter.roomId || '';
+    let qTimer = null;
+    const run = () => applyTrafficExpenseFilters();
+    qEl.addEventListener('input', () => {
+      view.trafficListFilter.q = qEl.value;
+      clearTimeout(qTimer);
+      qTimer = setTimeout(run, 120);
+    });
+    teamEl.addEventListener('change', () => {
+      view.trafficListFilter.team = teamEl.value;
+      run();
+    });
+    roomEl.addEventListener('change', () => {
+      view.trafficListFilter.roomId = roomEl.value;
+      run();
+    });
+    run();
   }
 
   /** 연구원·슈퍼바이저: 면접원별 개별 문구를 각 1:1 채팅으로 한 번에 전송 */
@@ -2729,6 +2948,7 @@
     }
 
     if (view.tab === 'traffic' && (state.me.role === 'supervisor' || state.me.role === 'interviewer')) {
+      bindTrafficExpenseFilters();
       document.querySelectorAll('.traffic-submit-toggle').forEach((btn) => {
         btn.addEventListener('click', () => {
           const id = btn.getAttribute('data-iv-id');

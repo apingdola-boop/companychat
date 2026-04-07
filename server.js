@@ -54,11 +54,27 @@ function emptyShared() {
     chatNotifyMutedByUser: {},
     chatNotifyMutedRoomsByUser: {},
     staffPresenceByUser: {},
+    /** 면접원 account id → { at, source?, manual? } 교통비 제출 표시 */
+    trafficExpenseSubmittedByIvId: {},
   };
+}
+
+function mergeTrafficExpenseMaps(base, incoming) {
+  const out = { ...(base && typeof base === 'object' ? base : {}) };
+  if (!incoming || typeof incoming !== 'object') return out;
+  for (const k of Object.keys(incoming)) {
+    const vb = incoming[k];
+    const va = out[k];
+    const tb = vb && typeof vb === 'object' ? Number(vb.at) || 0 : 0;
+    const ta = va && typeof va === 'object' ? Number(va.at) || 0 : 0;
+    if (tb >= ta) out[k] = vb;
+  }
+  return out;
 }
 
 function seedDemoAccounts() {
   const rows = [
+    { id: 'demo-admin', loginId: 'admin', password: 'hrc7766', name: '관리자', role: 'supervisor' },
     { id: 'demo-r1', loginId: 'researcher1', password: 'demo1234', name: '김연구', role: 'researcher' },
     { id: 'demo-r2', loginId: 'researcher2', password: 'demo1234', name: '이실험', role: 'researcher' },
     { id: 'demo-s1', loginId: 'supervisor1', password: 'demo1234', name: '박슈퍼', role: 'supervisor' },
@@ -212,6 +228,10 @@ function mergeSharedUpdate(payload) {
       payload.staffPresenceByUser && typeof payload.staffPresenceByUser === 'object'
         ? payload.staffPresenceByUser
         : shared.staffPresenceByUser,
+    trafficExpenseSubmittedByIvId:
+      payload.trafficExpenseSubmittedByIvId && typeof payload.trafficExpenseSubmittedByIvId === 'object'
+        ? mergeTrafficExpenseMaps(shared.trafficExpenseSubmittedByIvId, payload.trafficExpenseSubmittedByIvId)
+        : shared.trafficExpenseSubmittedByIvId,
   };
 }
 

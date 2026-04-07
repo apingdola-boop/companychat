@@ -2114,6 +2114,82 @@ html[data-theme='light'] .devbulk-grid thead th {
   color: var(--text);
 }
 
+.traffic-table-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem 0.85rem;
+  align-items: flex-end;
+  margin-bottom: 0.55rem;
+}
+
+.traffic-filter-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 6.5rem;
+}
+
+.traffic-filter-field--grow {
+  flex: 1 1 11rem;
+  min-width: 10rem;
+}
+
+.traffic-filter-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.traffic-filter-input,
+.traffic-filter-select {
+  width: 100%;
+  max-width: 100%;
+  padding: 0.4rem 0.5rem;
+  font-size: 0.82rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.traffic-filter-stats {
+  margin: 0 0 0.5rem;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.traffic-stat-ok {
+  color: var(--researcher);
+}
+
+.traffic-stat-no {
+  color: var(--supervisor);
+}
+
+.traffic-team-subhead td {
+  padding: 0.5rem 0.55rem 0.35rem !important;
+  background: var(--input-shade) !important;
+  border-bottom: 1px solid var(--border) !important;
+}
+
+.traffic-team-subhead-cell {
+  line-height: 1.35;
+}
+
+.traffic-team-subhead-title {
+  font-weight: 700;
+  font-size: 0.86rem;
+  color: var(--text);
+}
+
+.traffic-team-subhead-meta {
+  margin-left: 0.35rem;
+}
+
+.traffic-expense-grid tbody tr.traffic-team-subhead:hover td {
+  background: var(--input-shade) !important;
+}
+
 .traffic-expense-table-scroll {
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;

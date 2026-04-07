@@ -98,6 +98,17 @@ if (errors.length) {
   console.warn('건너뜀', errors.length, '건 (처음 5개):', errors.slice(0, 5));
 }
 
+const ADMIN_SEED = {
+  id: 'seed-admin',
+  loginId: 'admin',
+  passHash: sha256Hex('hrc7766'),
+  name: '관리자',
+  role: 'supervisor',
+};
+if (!accounts.some((a) => a.loginId === 'admin')) {
+  accounts.unshift(ADMIN_SEED);
+}
+
 const outDir = path.join(ROOT, 'data');
 fs.mkdirSync(outDir, { recursive: true });
 const outPath = path.join(outDir, 'seed-accounts.json');
