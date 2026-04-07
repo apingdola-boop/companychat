@@ -773,6 +773,7 @@
   const devBulkPendingImageByIvId = Object.create(null);
 
   let trafficPostMessageListenerAttached = false;
+  let trafficFileDlBinderAttached = false;
   let trafficCrossTabStorageAttached = false;
   let trafficBridgeSupabaseClient = null;
   let trafficBridgePollStarted = false;
@@ -2380,6 +2381,92 @@
     window.addEventListener('message', onTrafficToolPostMessage, false);
   }
 
+  function sanitizeTrafficDownloadFileName(s) {
+    return String(s || '')
+      .replace(/[<>:"/\\|?*\u0000-\u001f]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function extFromStorageUrl(url) {
+    try {
+      const u = new URL(url);
+      const m = u.pathname.match(/\.([a-zA-Z0-9]+)$/);
+      return m ? m[1].toLowerCase() : 'bin';
+    } catch (_) {
+      return 'bin';
+    }
+  }
+
+  function trafficExpenseProjectLabelForRow(activeProjectKey) {
+    if (!activeProjectKey) return '프로젝트';
+    const room = state.rooms.find((r) => r.id === activeProjectKey);
+    if (!room) return '프로젝트';
+    const pn = String(room.projectNumber || '').trim();
+    if (pn) return pn;
+    return String(room.name || '프로젝트').trim() || '프로젝트';
+  }
+
+  function trafficExpenseMonthLabelForRow(fil, recAt) {
+    if (fil && fil.ym && /^\d{4}-\d{2}$/.test(fil.ym)) {
+      return parseInt(fil.ym.split('-')[1], 10) + '월';
+    }
+    const at = recAt && Number(recAt) ? Number(recAt) : Date.now();
+    const d = new Date(at);
+    return d.getMonth() + 1 + '월';
+  }
+
+  async function downloadTrafficExpenseFromUrl(url, filename, btn) {
+    if (!url) return;
+    if (btn) {
+      if (btn.getAttribute('data-traffic-dl-busy') === '1') return;
+      btn.setAttribute('data-traffic-dl-busy', '1');
+      btn.disabled = true;
+    }
+    try {
+      const res = await fetch(url, { mode: 'cors' });
+      if (!res.ok) throw new Error(String(res.status));
+      const blob = await res.blob();
+      const obj = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = obj;
+      a.download = sanitizeTrafficDownloadFileName(filename) || 'download';
+      a.rel = 'noopener';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(obj), 3000);
+      showToast('다운로드를 시작했습니다.');
+    } catch (e) {
+      try {
+        console.warn('[traffic-dl]', e);
+      } catch (_) {}
+      try {
+        window.open(url, '_blank', 'noopener,noreferrer');
+      } catch (_) {}
+      showToast('브라우저 제한으로 새 탭에서 열었습니다. 저장 시 파일명을 직접 지정해 주세요.');
+    } finally {
+      if (btn) {
+        btn.removeAttribute('data-traffic-dl-busy');
+        btn.disabled = false;
+      }
+    }
+  }
+
+  function ensureTrafficExpenseFileDownloadBinder() {
+    if (trafficFileDlBinderAttached) return;
+    trafficFileDlBinderAttached = true;
+    document.addEventListener('click', (ev) => {
+      const btn = ev.target.closest('.traffic-file-dl');
+      if (!btn) return;
+      ev.preventDefault();
+      const url = btn.getAttribute('data-traffic-url');
+      const filename = btn.getAttribute('data-traffic-filename') || 'download';
+      if (!url) return;
+      downloadTrafficExpenseFromUrl(url, filename, btn).catch(() => {});
+    });
+  }
+
   /** 다른 탭에서 저장한 교통비 제출 맵을 localStorage(storage 이벤트)으로 반영 */
   function onTrafficSharedStorageSync(ev) {
     if (ev.key !== STORAGE_V2 || !ev.newValue || ev.storageArea !== localStorage) return;
@@ -2629,14 +2716,25 @@
 
       let fileButtons = '';
       if (submitted && rec.files) {
+        const projLabel = trafficExpenseProjectLabelForRow(activeProjectKey);
+        const monthLabel = trafficExpenseMonthLabelForRow(fil, rec.at);
+        const ivName = String(uv.name || '면접원').trim();
         if (rec.files.excel) {
-          fileButtons += `<a href="${escapeHtml(rec.files.excel)}" target="_blank" class="btn btn-ghost traffic-file-btn" title="엑셀 다운로드">📊</a>`;
+          const excelDlName = sanitizeTrafficDownloadFileName(`${projLabel}_${ivName}_${monthLabel}.xlsx`);
+          fileButtons += `<button type="button" class="btn btn-ghost traffic-file-btn traffic-file-dl" title="엑셀 다운로드" data-traffic-url="${escapeHtml(
+            rec.files.excel
+          )}" data-traffic-filename="${escapeHtml(excelDlName)}">📊</button>`;
         }
         if (rec.files.images) {
           const imgKeys = Object.keys(rec.files.images);
           imgKeys.forEach((key) => {
             const label = key === 'toll' ? '통행료' : key === 'meal' ? '식비' : '기타';
-            fileButtons += `<a href="${escapeHtml(rec.files.images[key])}" target="_blank" class="btn btn-ghost traffic-file-btn" title="${label} 영수증">🧾</a>`;
+            const iu = rec.files.images[key];
+            const ext = extFromStorageUrl(iu);
+            const imgDlName = sanitizeTrafficDownloadFileName(`${projLabel}_${ivName}_${label}_${monthLabel}.${ext}`);
+            fileButtons += `<button type="button" class="btn btn-ghost traffic-file-btn traffic-file-dl" title="${label} 영수증" data-traffic-url="${escapeHtml(
+              iu
+            )}" data-traffic-filename="${escapeHtml(imgDlName)}">🧾</button>`;
           });
         }
       }
@@ -3034,6 +3132,7 @@
 
   function bindMain() {
     ensureTrafficPostMessageListener();
+    ensureTrafficExpenseFileDownloadBinder();
     ensureTrafficCrossTabStorageSync();
     ensureTrafficBridgePolling();
 
