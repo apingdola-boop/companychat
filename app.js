@@ -4,6 +4,23 @@
   const STORAGE_V2 = 'company-chat-draft-v2';
   const STORAGE_V1 = 'company-chat-draft-v1';
   const LS_THEME = 'company-chat-theme';
+  /** 메인 상단에서 「더보기」로 펼친 질문/의견·교통비 탭 유지 */
+  const LS_EXTRA_MAIN_TABS = 'company-chat-extra-main-tabs';
+
+  function getExtraMainTabsOpen() {
+    try {
+      return localStorage.getItem(LS_EXTRA_MAIN_TABS) === '1';
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function setExtraMainTabsOpen(open) {
+    try {
+      if (open) localStorage.setItem(LS_EXTRA_MAIN_TABS, '1');
+      else localStorage.removeItem(LS_EXTRA_MAIN_TABS);
+    } catch (_) {}
+  }
 
   /** Socket 페이로드·메모리 보호 — 서버 maxHttpBufferSize(50MB)와 base64 팽창을 감안 */
   const MAX_CHAT_MEDIA_BYTES = 36 * 1024 * 1024;
@@ -165,6 +182,21 @@
 
   /** 슈퍼바이저·면접원 — 교통비·거리 계산 외부 도구 (ROUTE CALC, GitHub Pages) */
   const TRAFFIC_TOOL_URL = 'https://apingdola-boop.github.io/trafficservice.github.io/';
+  /** iframe postMessage 출처 검증 (경로만 다를 뿐 origin 동일) */
+  const TRAFFIC_TOOL_ORIGIN = 'https://apingdola-boop.github.io';
+
+  function mergeTrafficExpenseMaps(base, incoming) {
+    const out = { ...(base && typeof base === 'object' ? base : {}) };
+    if (!incoming || typeof incoming !== 'object') return out;
+    for (const k of Object.keys(incoming)) {
+      const vb = incoming[k];
+      const va = out[k];
+      const tb = vb && typeof vb === 'object' ? Number(vb.at) || 0 : 0;
+      const ta = va && typeof va === 'object' ? Number(va.at) || 0 : 0;
+      if (tb >= ta) out[k] = vb;
+    }
+    return out;
+  }
 
   const TEAM_ORDER = ['quant1', 'quant2', 'busan', 'daegu', 'daejeon', 'gwangju'];
   const TEAMS = {
@@ -533,6 +565,7 @@
       chatNotifyMutedByUser: {},
       chatNotifyMutedRoomsByUser: {},
       staffPresenceByUser: {},
+      trafficExpenseSubmittedByIvId: {},
     };
   }
 
@@ -576,6 +609,12 @@
         !Array.isArray(data.staffPresenceByUser)
           ? data.staffPresenceByUser
           : {},
+      trafficExpenseSubmittedByIvId:
+        data.trafficExpenseSubmittedByIvId &&
+        typeof data.trafficExpenseSubmittedByIvId === 'object' &&
+        !Array.isArray(data.trafficExpenseSubmittedByIvId)
+          ? data.trafficExpenseSubmittedByIvId
+          : {},
       _migrateV1: fromV1 || (!!data.directory && !data.accounts),
     };
     if (data.directory && !base.accounts.length) base._legacyDirectory = data.directory;
@@ -598,6 +637,8 @@
 
   /** 개발자 모드: 면접원 계정 id → 첨부 예정 사진(data URL). 탭을 벗어나면 비움. */
   const devBulkPendingImageByIvId = Object.create(null);
+
+  let trafficPostMessageListenerAttached = false;
 
   const el = {
     root: null,
@@ -813,6 +854,7 @@
       chatNotifyMutedByUser: state.chatNotifyMutedByUser || {},
       chatNotifyMutedRoomsByUser: state.chatNotifyMutedRoomsByUser || {},
       staffPresenceByUser: state.staffPresenceByUser || {},
+      trafficExpenseSubmittedByIvId: state.trafficExpenseSubmittedByIvId || {},
     };
   }
 
@@ -851,6 +893,14 @@
         : {};
     state.staffPresenceByUser =
       payload.staffPresenceByUser && typeof payload.staffPresenceByUser === 'object' ? payload.staffPresenceByUser : {};
+    if (payload.trafficExpenseSubmittedByIvId && typeof payload.trafficExpenseSubmittedByIvId === 'object') {
+      state.trafficExpenseSubmittedByIvId = mergeTrafficExpenseMaps(
+        state.trafficExpenseSubmittedByIvId,
+        payload.trafficExpenseSubmittedByIvId
+      );
+    } else if (!state.trafficExpenseSubmittedByIvId) {
+      state.trafficExpenseSubmittedByIvId = {};
+    }
     syncSessionMeWithAccounts();
   }
 
@@ -971,6 +1021,7 @@
         chatNotifyMutedByUser: state.chatNotifyMutedByUser || {},
         chatNotifyMutedRoomsByUser: state.chatNotifyMutedRoomsByUser || {},
         staffPresenceByUser: state.staffPresenceByUser || {},
+        trafficExpenseSubmittedByIvId: state.trafficExpenseSubmittedByIvId || {},
       };
       localStorage.setItem(STORAGE_V2, JSON.stringify(persist));
       if (localStorage.getItem(STORAGE_V1)) localStorage.removeItem(STORAGE_V1);
@@ -1422,6 +1473,7 @@
 
     if (state.me && !canManageAccounts() && view.tab === 'accounts') view.tab = 'chats';
     if (state.me && !canManageAccounts() && view.tab === 'devbulk') view.tab = 'chats';
+    if (state.me && !getExtraMainTabsOpen() && (view.tab === 'feedback' || view.tab === 'traffic')) view.tab = 'chats';
     if (
       state.me &&
       view.tab === 'traffic' &&
@@ -1743,7 +1795,7 @@
     } else if (view.tab === 'devbulk' && canManageAccounts()) {
       listBody = devBulkTabHTML();
     } else if (view.tab === 'traffic' && (me.role === 'supervisor' || me.role === 'interviewer')) {
-      listBody = trafficToolTabHTML();
+      listBody = trafficToolTabHTML(me);
     }
 
     const annBtn =
@@ -1761,6 +1813,7 @@
     const showAccTab = me.role === 'researcher' || me.role === 'supervisor';
     /** 연구원은 숨김 — 슈퍼바이저·면접원만 표시 */
     const showContactsTab = me.role === 'supervisor' || me.role === 'interviewer';
+    const extraMainTabsOpen = getExtraMainTabsOpen();
     const tabsClass = 'tabs tabs-compact';
     const tabAccountsBtn = showAccTab
       ? `<button type="button" class="tab ${view.tab === 'accounts' ? 'active' : ''}" data-tab="accounts">계정</button>`
@@ -1768,14 +1821,20 @@
     const tabContactsBtn = showContactsTab
       ? `<button type="button" class="tab ${view.tab === 'contacts' ? 'active' : ''}" data-tab="contacts">주소록</button>`
       : '';
-    const tabFeedbackBtn = `<button type="button" class="tab ${view.tab === 'feedback' ? 'active' : ''}" data-tab="feedback">질문 / 의견</button>`;
+    const tabFeedbackBtn = extraMainTabsOpen
+      ? `<button type="button" class="tab ${view.tab === 'feedback' ? 'active' : ''}" data-tab="feedback">질문 / 의견</button>`
+      : '';
     const tabDevBulkBtn = showAccTab
       ? `<button type="button" class="tab ${view.tab === 'devbulk' ? 'active' : ''}" data-tab="devbulk">개발자 모드</button>`
       : '';
     const showTrafficToolTab = me.role === 'supervisor' || me.role === 'interviewer';
-    const tabTrafficBtn = showTrafficToolTab
-      ? `<button type="button" class="tab ${view.tab === 'traffic' ? 'active' : ''}" data-tab="traffic">교통비</button>`
-      : '';
+    const tabTrafficBtn =
+      extraMainTabsOpen && showTrafficToolTab
+        ? `<button type="button" class="tab ${view.tab === 'traffic' ? 'active' : ''}" data-tab="traffic">교통비</button>`
+        : '';
+    const tabMoreBtn = `<button type="button" class="tab tab-more${extraMainTabsOpen ? ' tab-more--open' : ''}" id="btn-toggle-extra-tabs" title="${
+      extraMainTabsOpen ? '질문·의견·교통비 탭 숨기기' : '질문·의견·교통비 탭 보이기'
+    }">${extraMainTabsOpen ? '간단히' : '더보기'}</button>`;
     const fabHidden =
       view.tab === 'accounts' ||
       view.tab === 'feedback' ||
@@ -1824,10 +1883,11 @@
         <nav class="${tabsClass}">
           <button type="button" class="tab ${view.tab === 'chats' ? 'active' : ''}" data-tab="chats">채팅</button>
           ${tabContactsBtn}
-          ${tabFeedbackBtn}
           ${tabDevBulkBtn}
-          ${tabTrafficBtn}
           ${tabAccountsBtn}
+          ${tabFeedbackBtn}
+          ${tabTrafficBtn}
+          ${tabMoreBtn}
         </nav>
         ${chatNotifyPrefBar}
         <div class="list-scroll">${listBody}</div>
@@ -1973,14 +2033,164 @@
     return '<p class="hint">이 탭은 면접원·연구원·슈퍼바이저용입니다.</p>';
   }
 
-  /** 슈퍼바이저·면접원 — 외부 교통·유류비 계산기 (GitHub Pages) */
-  function trafficToolTabHTML() {
+  function markTrafficExpenseSubmittedForIv(ivAccountId, opts) {
+    const id = String(ivAccountId || '').trim();
+    if (!id) return false;
+    const acc = state.accounts.find((a) => a.id === id && a.role === 'interviewer');
+    if (!acc) return false;
+    if (!state.trafficExpenseSubmittedByIvId || typeof state.trafficExpenseSubmittedByIvId !== 'object')
+      state.trafficExpenseSubmittedByIvId = {};
+    const record = {
+      at: Date.now(),
+      manual: !!(opts && opts.manual),
+      source: (opts && opts.source) || 'manual',
+    };
+    // 파일 정보 저장 (Supabase Storage URLs)
+    if (opts && opts.files) {
+      record.files = opts.files;
+    }
+    // 요약 정보 저장
+    if (opts && opts.summary) {
+      record.summary = opts.summary;
+    }
+    state.trafficExpenseSubmittedByIvId[id] = record;
+    return true;
+  }
+
+  function markTrafficExpenseSubmittedByLoginId(loginId, opts) {
+    const lid = String(loginId || '').trim();
+    if (!lid) return false;
+    const acc = state.accounts.find((a) => a.role === 'interviewer' && String(a.loginId) === lid);
+    if (!acc) return false;
+    const source = typeof opts === 'string' ? opts : (opts && opts.source) || 'postMessage';
+    return markTrafficExpenseSubmittedForIv(acc.id, { 
+      source: source, 
+      manual: false,
+      files: opts && opts.files,
+      summary: opts && opts.summary
+    });
+  }
+
+  function onTrafficToolPostMessage(ev) {
+    if (ev.origin !== TRAFFIC_TOOL_ORIGIN) return;
+    const data = ev.data;
+    if (!data || typeof data !== 'object') return;
+    if (data.type !== 'companychat-traffic-submitted') return;
+    if (!state.me) return;
+    const loginId = data.loginId != null ? String(data.loginId).trim() : '';
+    if (!loginId) return;
+    const opts = {
+      source: data.source || 'route-calc',
+      files: data.files || null,
+      summary: data.summary || null
+    };
+    if (markTrafficExpenseSubmittedByLoginId(loginId, opts)) {
+      saveState();
+      showToast('교통비 제출로 기록했습니다: ' + loginId);
+      if (view.screen === 'main' && view.tab === 'traffic') render();
+    }
+  }
+
+  function ensureTrafficPostMessageListener() {
+    if (trafficPostMessageListenerAttached) return;
+    trafficPostMessageListenerAttached = true;
+    window.addEventListener('message', onTrafficToolPostMessage, false);
+  }
+
+  /** 슈퍼바이저·면접원 — 외부 교통·유류비 계산기 (GitHub Pages) + 제출 현황 표 */
+  function trafficToolTabHTML(me) {
     const u = TRAFFIC_TOOL_URL;
     const esc = escapeHtml(u);
+    const subs =
+      state.trafficExpenseSubmittedByIvId && typeof state.trafficExpenseSubmittedByIvId === 'object'
+        ? state.trafficExpenseSubmittedByIvId
+        : {};
+    const ivs = state.accounts
+      .filter((x) => x.role === 'interviewer')
+      .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'ko'));
+    const canToggleRow = (urow) =>
+      me.role === 'supervisor' || (me.role === 'interviewer' && me.id === urow.id);
+    const rows = ivs
+      .map((uv) => {
+        const rec = subs[uv.id];
+        const at = rec && rec.at ? Number(rec.at) : 0;
+        const submitted = at > 0;
+        const status = submitted
+          ? `<span class="traffic-cell-status traffic-cell-status--ok">제출 완료 · ${escapeHtml(formatTime(at))}</span>`
+          : `<span class="traffic-cell-status traffic-cell-status--no">미제출</span>`;
+        
+        // 파일 다운로드 버튼 생성
+        let fileButtons = '';
+        if (submitted && rec.files) {
+          if (rec.files.excel) {
+            fileButtons += `<a href="${escapeHtml(rec.files.excel)}" target="_blank" class="btn btn-ghost traffic-file-btn" title="엑셀 다운로드">📊</a>`;
+          }
+          if (rec.files.images) {
+            const imgKeys = Object.keys(rec.files.images);
+            imgKeys.forEach((key) => {
+              const label = key === 'toll' ? '통행료' : key === 'meal' ? '식비' : '기타';
+              fileButtons += `<a href="${escapeHtml(rec.files.images[key])}" target="_blank" class="btn btn-ghost traffic-file-btn" title="${label} 영수증">🧾</a>`;
+            });
+          }
+        }
+        
+        // 요약 정보 툴팁
+        let summaryInfo = '';
+        if (submitted && rec.summary) {
+          const cost = rec.summary.totalCost ? Number(rec.summary.totalCost).toLocaleString() + '원' : '';
+          summaryInfo = cost ? ` <span class="traffic-summary-cost">(${cost})</span>` : '';
+        }
+        
+        const actions = canToggleRow(uv)
+          ? submitted
+            ? `<button type="button" class="btn btn-ghost traffic-submit-toggle" data-iv-id="${escapeHtml(uv.id)}" data-action="clear">표시 취소</button>`
+            : `<button type="button" class="btn btn-secondary traffic-submit-toggle" data-iv-id="${escapeHtml(uv.id)}" data-action="set">제출 표시</button>`
+          : '—';
+        return `<tr>
+          <td class="traffic-cell-id"><code>${escapeHtml(String(uv.loginId))}</code></td>
+          <td>${escapeHtml(uv.name)}</td>
+          <td>${escapeHtml(teamLabel(uv.team) || '—')}</td>
+          <td class="traffic-cell-status-wrap">${status}${summaryInfo}</td>
+          <td class="traffic-cell-files">${fileButtons || '—'}</td>
+          <td class="traffic-cell-actions">${actions}</td>
+        </tr>`;
+      })
+      .join('');
+    const tableBody = rows || '<tr><td colspan="6" class="traffic-cell-empty">등록된 면접원이 없습니다.</td></tr>';
+    const parentOriginEsc = escapeHtml(window.location.origin || '');
     return `
       <div class="traffic-tool-tab feedback-tab">
         <h2 class="feedback-heading">교통비 · 거리 계산</h2>
-        <p class="caption">면접·조사 이동 거리·유류비를 잡는 외부 도구입니다. 카카오 경로 API를 쓰는 <a href="${esc}" target="_blank" rel="noopener noreferrer">ROUTE CALC</a> 페이지를 여기에 붙여 두었습니다.</p>
+        <p class="caption">아래 표는 <strong>교통비 제출 여부</strong>만 모읍니다. 메일로 보낸 엑셀·첨부 파일은 이 앱 서버에 자동 저장되지 않습니다. ROUTE CALC에서 전송 후 연동 코드를 넣으면 여기에 자동으로 제출 표시가 됩니다.</p>
+        <div class="traffic-expense-sheet-wrap">
+          <h3 class="traffic-sheet-title">면접원 교통비 제출 현황</h3>
+          <div class="traffic-expense-table-scroll">
+            <table class="traffic-expense-grid">
+              <thead>
+                <tr>
+                  <th scope="col">면접원 ID</th>
+                  <th scope="col">이름</th>
+                  <th scope="col">팀</th>
+                  <th scope="col">교통비 제출</th>
+                  <th scope="col">파일</th>
+                  <th scope="col">수동</th>
+                </tr>
+              </thead>
+              <tbody>${tableBody}</tbody>
+            </table>
+          </div>
+        </div>
+        <details class="traffic-integration-details">
+          <summary>ROUTE CALC에서 자동으로 「제출」 표시하기</summary>
+          <p class="caption">GitHub Pages <a href="${esc}" target="_blank" rel="noopener noreferrer">trafficservice</a> 쪽에서 「자동 이메일 전송」 성공 직후 다음을 실행하세요. <code>loginId</code>는 전송한 면접원의 로그인 아이디(문자열)로 바꿉니다.</p>
+          <pre class="traffic-code-sample">if (window.parent !== window) {
+  window.parent.postMessage(
+    { type: 'companychat-traffic-submitted', loginId: '여기에면접원아이디' },
+    '${parentOriginEsc}'
+  );
+}</pre>
+          <p class="caption">이 앱 주소가 <code>${parentOriginEsc}</code> 가 아니면(로컬 등) 위 두 번째 인자를 그 출처에 맞게 수정하세요.</p>
+        </details>
         <div class="traffic-tool-bar">
           <a class="btn btn-secondary traffic-tool-open" href="${esc}" target="_blank" rel="noopener noreferrer">새 탭에서 전체 화면으로 열기</a>
         </div>
@@ -2177,6 +2387,8 @@
   }
 
   function bindMain() {
+    ensureTrafficPostMessageListener();
+
     document.getElementById('btn-logout').addEventListener('click', () => {
       state.me = null;
       view.screen = 'login';
@@ -2223,6 +2435,17 @@
         );
       });
     }
+
+    document.getElementById('btn-toggle-extra-tabs')?.addEventListener('click', () => {
+      const cur = getExtraMainTabsOpen();
+      if (cur) {
+        setExtraMainTabsOpen(false);
+        if (view.tab === 'feedback' || view.tab === 'traffic') view.tab = 'chats';
+      } else {
+        setExtraMainTabsOpen(true);
+      }
+      render();
+    });
 
     if (view.tab === 'feedback') {
       const submit = document.getElementById('fb-submit');
@@ -2502,6 +2725,33 @@
         view.devBulkSelectedIds = [];
         view.devBulkSearchDraft = '';
         render();
+      });
+    }
+
+    if (view.tab === 'traffic' && (state.me.role === 'supervisor' || state.me.role === 'interviewer')) {
+      document.querySelectorAll('.traffic-submit-toggle').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const id = btn.getAttribute('data-iv-id');
+          const action = btn.getAttribute('data-action');
+          if (!id || !state.me) return;
+          const acc = state.accounts.find((a) => a.id === id && a.role === 'interviewer');
+          if (!acc) return;
+          const allowed =
+            state.me.role === 'supervisor' || (state.me.role === 'interviewer' && state.me.id === id);
+          if (!allowed) return;
+          if (action === 'set') {
+            markTrafficExpenseSubmittedForIv(id, { manual: true, source: 'manual' });
+            saveState();
+            showToast('제출 완료로 표시했습니다.');
+          } else if (action === 'clear') {
+            if (state.trafficExpenseSubmittedByIvId && state.trafficExpenseSubmittedByIvId[id]) {
+              delete state.trafficExpenseSubmittedByIvId[id];
+            }
+            saveState();
+            showToast('제출 표시를 지웠습니다.');
+          }
+          render();
+        });
       });
     }
 
@@ -3384,6 +3634,7 @@
        예전 조건 때문에 시드를 건너뛰어 로그인 가능한 계정이 전무해질 수 있음 */
     if (!state.accounts.length) {
       const rows = [
+        { id: 'demo-admin', loginId: 'admin', password: 'hrc7766', name: '관리자', role: 'supervisor' },
         { id: 'demo-r1', loginId: 'researcher1', password: 'demo1234', name: '김연구', role: 'researcher' },
         { id: 'demo-r2', loginId: 'researcher2', password: 'demo1234', name: '이실험', role: 'researcher' },
         { id: 'demo-s1', loginId: 'supervisor1', password: 'demo1234', name: '박슈퍼', role: 'supervisor' },

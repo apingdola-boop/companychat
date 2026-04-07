@@ -1752,6 +1752,23 @@ h1 {
   text-overflow: ellipsis;
 }
 
+.tabs.tabs-compact .tab.tab-more {
+  flex: 0 0 auto;
+  min-width: max-content;
+  max-width: none;
+  padding-left: 0.5rem;
+  padding-right: 0.5rem;
+  color: var(--accent);
+  font-weight: 600;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+.tabs.tabs-compact .tab.tab-more.tab-more--open {
+  color: var(--muted);
+  font-weight: 500;
+}
+
 .account-toolbar {
   padding: 0.75rem 1rem;
   border-bottom: 1px solid var(--border);
@@ -2080,6 +2097,141 @@ html[data-theme='light'] .devbulk-grid thead th {
   border-radius: 14px;
   border: 1px dashed var(--border);
   background: var(--input-shade);
+}
+
+.traffic-expense-sheet-wrap {
+  margin: 0.75rem 0 1rem;
+  padding: 0.85rem 1rem;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+}
+
+.traffic-sheet-title {
+  margin: 0 0 0.6rem;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.traffic-expense-table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.traffic-expense-grid {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.traffic-expense-grid th,
+.traffic-expense-grid td {
+  padding: 0.45rem 0.55rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+.traffic-expense-grid thead th {
+  background: var(--input-shade);
+  font-weight: 700;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.traffic-expense-grid tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.traffic-expense-grid tbody tr:hover td {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+html[data-theme='light'] .traffic-expense-grid tbody tr:hover td {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.traffic-cell-id code {
+  font-size: 0.78rem;
+}
+
+.traffic-cell-status {
+  display: inline-block;
+  font-weight: 600;
+}
+
+.traffic-cell-status--ok {
+  color: var(--researcher);
+}
+
+.traffic-cell-status--no {
+  color: var(--muted);
+}
+
+.traffic-cell-actions {
+  white-space: nowrap;
+}
+
+.traffic-cell-actions .btn {
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+}
+
+.traffic-cell-files {
+  white-space: nowrap;
+}
+
+.traffic-file-btn {
+  padding: 0.2rem 0.4rem !important;
+  font-size: 1rem !important;
+  margin: 0 2px;
+  text-decoration: none;
+}
+
+.traffic-file-btn:hover {
+  background: var(--bg-hover);
+}
+
+.traffic-summary-cost {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-left: 4px;
+}
+
+.traffic-cell-empty {
+  text-align: center;
+  color: var(--muted);
+  padding: 1rem !important;
+}
+
+.traffic-integration-details {
+  margin: 0 0 0.85rem;
+  padding: 0.65rem 0.85rem;
+  border-radius: 10px;
+  border: 1px dashed var(--border);
+  background: var(--input-shade);
+}
+
+.traffic-integration-details summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.traffic-code-sample {
+  margin: 0.5rem 0 0;
+  padding: 0.65rem 0.75rem;
+  border-radius: 8px;
+  overflow-x: auto;
+  font-size: 0.72rem;
+  line-height: 1.45;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
 }
 
 .traffic-tool-tab .traffic-tool-bar {
