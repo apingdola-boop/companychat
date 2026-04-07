@@ -2234,27 +2234,25 @@
   }
 
   function guessProjectKeyForTrafficPayload(p) {
+    // 구조적으로 겹치는 단체방(roomId) 때문에 중복 기록이 나는 문제를 막기 위해
+    // "프로젝트 번호 자체"를 제출 키로 사용한다. (ivId + projectNumber = 유일)
     const pn = p && p.projectNumber != null ? String(p.projectNumber).trim() : '';
+    if (pn) return 'pn:' + pn;
     const pname = p && p.projectName != null ? String(p.projectName).trim() : '';
-    if (pn) {
-      const hits = state.rooms.filter(
-        (r) => r && r.type === 'group' && String(r.projectNumber || '').trim() === pn
-      );
-      if (hits.length === 1 && hits[0].id) return String(hits[0].id);
-      // 같은 프로젝트 번호 단체방이 여러 개면 잘못 찍히는 것보다 "기록 안 함"이 안전
-      if (hits.length > 1) return 'ambiguous:' + pn;
-    }
-    if (pname) {
-      const room = state.rooms.find((r) => r && r.type === 'group' && String(r.name || '').trim() === pname);
-      if (room && room.id) return String(room.id);
-    }
-    if (pn) {
-      // 번호로는 반드시 projectNumber 필드로만 매칭 (문자열 포함 매칭은 오탐 위험)
-      return 'unmatched:' + pn;
-    }
     if (pname) return 'name:' + pname;
-    if (pn) return 'num:' + pn;
     return '';
+  }
+
+  function trafficSubmissionKeyFromRoomId(roomId) {
+    const rid = String(roomId || '').trim();
+    if (!rid) return '';
+    const r = state.rooms.find((x) => x && x.id === rid);
+    if (r && r.type === 'group') {
+      const pn = String(r.projectNumber || '').trim();
+      if (pn) return 'pn:' + pn;
+    }
+    // projectNumber가 없으면 roomId 기반으로라도 분리
+    return 'room:' + rid;
   }
 
   function markTrafficExpenseSubmittedForIvProjectKey(ivAccountId, projectKey, opts) {
@@ -2384,10 +2382,6 @@
       summary: data.summary || null,
     };
     const projectKey = guessProjectKeyForTrafficPayload(data);
-    if (projectKey && (projectKey.startsWith('ambiguous:') || projectKey.startsWith('unmatched:'))) {
-      showToast('프로젝트 번호 매칭 실패(중복/미설정). 단체방의 프로젝트 번호를 확인해 주세요.');
-      return;
-    }
     const okProject = projectKey
       ? markTrafficExpenseSubmittedForIvProjectKey(acc.id, projectKey, { ...opts, manual: false })
       : false;
@@ -2625,10 +2619,6 @@
         at: at || undefined,
       };
       const projectKey = guessProjectKeyForTrafficPayload(p);
-      if (projectKey && (projectKey.startsWith('ambiguous:') || projectKey.startsWith('unmatched:'))) {
-        rememberTrafficBridgeRowId(row.id);
-        continue;
-      }
       if (projectKey) {
         if (markTrafficExpenseSubmittedForIvProjectKey(acc.id, projectKey, { ...opts, manual: false })) changed = true;
       } else {
@@ -2728,13 +2718,20 @@
     const canToggleRow = (urow) =>
       me.role === 'supervisor' || (me.role === 'interviewer' && me.id === urow.id);
 
-    const activeProjectKey = fil.roomId || '';
+    const activeProjectRoomId = fil.roomId || '';
+    const activeProjectKey = activeProjectRoomId ? trafficSubmissionKeyFromRoomId(activeProjectRoomId) : '';
 
     function oneRow(uv) {
       const rec = activeProjectKey
-        ? subsByProj[uv.id] && typeof subsByProj[uv.id] === 'object'
-          ? subsByProj[uv.id][activeProjectKey] || null
-          : null
+        ? (() => {
+            const mp = subsByProj[uv.id] && typeof subsByProj[uv.id] === 'object' ? subsByProj[uv.id] : null;
+            if (!mp) return null;
+            // 신규(프로젝트번호 기반) 키 우선
+            if (mp[activeProjectKey]) return mp[activeProjectKey];
+            // 과거(roomId 기반) 데이터 호환: roomId로 저장된 흔적이 있으면 보여주되, 신규 키가 생기면 사라짐
+            if (activeProjectRoomId && mp[activeProjectRoomId]) return mp[activeProjectRoomId];
+            return null;
+          })()
         : subsFlat[uv.id];
       const at = rec && rec.at ? Number(rec.at) : 0;
       const submitted = at > 0 && !(rec && rec.cleared);
@@ -3528,7 +3525,8 @@
           showToast('프로젝트(단체방)를 먼저 선택해 주세요.');
           return;
         }
-        const pk = view.trafficListFilter.roomId;
+        const pk = trafficSubmissionKeyFromRoomId(view.trafficListFilter.roomId);
+        if (!pk) return;
           if (action === 'set') {
           markTrafficExpenseSubmittedForIvProjectKey(id, pk, { manual: true, source: 'manual' });
             saveState();
