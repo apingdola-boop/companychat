@@ -661,6 +661,7 @@
     return {
       me: null,
       accounts: [],
+    projects: [],
       rooms: [],
       messages: {},
       feedbackThreads: [],
@@ -685,6 +686,7 @@
             a && a.role === 'interviewer' && a.team === 'seoul' ? { ...a, team: 'quant1' } : a
           )
         : [],
+      projects: Array.isArray(data.projects) ? data.projects : [],
       rooms: Array.isArray(data.rooms) ? data.rooms : [],
       messages: data.messages && typeof data.messages === 'object' ? data.messages : {},
       feedbackThreads: Array.isArray(data.feedbackThreads) ? data.feedbackThreads : [],
@@ -962,6 +964,7 @@
   function getSharedPayload() {
     return {
       accounts: state.accounts,
+    projects: state.projects,
       rooms: state.rooms,
       messages: state.messages,
       feedbackThreads: state.feedbackThreads,
@@ -996,6 +999,7 @@
   function applySharedPayload(payload) {
     if (!payload || typeof payload !== 'object') return;
     state.accounts = Array.isArray(payload.accounts) ? payload.accounts : [];
+  state.projects = Array.isArray(payload.projects) ? payload.projects : [];
     state.rooms = Array.isArray(payload.rooms) ? payload.rooms : [];
     state.messages = payload.messages && typeof payload.messages === 'object' ? payload.messages : {};
     state.feedbackThreads = Array.isArray(payload.feedbackThreads) ? payload.feedbackThreads : [];
@@ -1141,6 +1145,7 @@
       const persist = {
         me: state.me,
         accounts: state.accounts,
+      projects: state.projects,
         rooms: state.rooms,
         messages: state.messages,
         feedbackThreads: state.feedbackThreads,
@@ -3661,6 +3666,75 @@
     return html || '<p class="caption" style="padding:0.5rem 0">선택 가능한 멤버가 없습니다.</p>';
   }
 
+  function normalizeProjectNumber(v) {
+    const s = String(v ?? '').trim();
+    if (!s) return '';
+    return s.replace(/\s/g, '');
+  }
+
+  function normalizeProjectName(v) {
+    return String(v ?? '').trim();
+  }
+
+  function sheetToProjectRows(matrix) {
+    if (!Array.isArray(matrix) || !matrix.length) return [];
+    const headerRow = (matrix[0] || []).map((cell) => String(cell || '').trim().toLowerCase());
+    const findIndex = (keys) => headerRow.findIndex((h) => keys.some((k) => h.includes(k)));
+    const numIdx = findIndex(['프로젝트', 'project', '번호', 'number', 'no']);
+    const nameIdx = findIndex(['프로젝트명', 'projectname', 'name', '명', 'title']);
+    const hasHeader = numIdx !== -1 || nameIdx !== -1;
+    const start = hasHeader ? 1 : 0;
+    const out = [];
+    for (let i = start; i < matrix.length; i++) {
+      const row = matrix[i];
+      if (!row) continue;
+      const number = normalizeProjectNumber(row[hasHeader ? numIdx : 0]);
+      const name = normalizeProjectName(row[hasHeader ? nameIdx : 1]);
+      if (!number && !name) continue;
+      out.push({ sheetRow: i + 1, number, name });
+    }
+    return out;
+  }
+
+  async function importProjectsFromExcelFile(file) {
+    if (typeof XLSX === 'undefined') {
+      alert('엑셀 라이브러리를 불러오지 못했습니다. 인터넷 연결을 확인 후 새로고침 해 주세요.');
+      return;
+    }
+    if (!canManageAccounts()) return;
+    let wb;
+    try {
+      const buf = await file.arrayBuffer();
+      wb = XLSX.read(buf, { type: 'array' });
+    } catch (_) {
+      alert('파일을 읽을 수 없습니다.');
+      return;
+    }
+    const sn = wb.SheetNames[0];
+    if (!sn) {
+      alert('시트가 비어 있습니다.');
+      return;
+    }
+    const matrix = XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1, defval: '' });
+    const parsed = sheetToProjectRows(matrix);
+    if (!parsed.length) {
+      alert('가져올 프로젝트가 없습니다. (프로젝트 번호/프로젝트명 열이 있는지 확인)');
+      return;
+    }
+    if (!Array.isArray(state.projects)) state.projects = [];
+    const byNum = new Map(state.projects.map((p) => [String(p.number), p]));
+    let added = 0;
+    for (const r of parsed) {
+      if (!r.number) continue;
+      if (byNum.has(r.number)) continue;
+      byNum.set(r.number, { number: r.number, name: r.name || '' });
+      added++;
+    }
+    state.projects = Array.from(byNum.values()).sort((a, b) => String(a.number).localeCompare(String(b.number)));
+    saveState();
+    showToast(`프로젝트 ${added}개를 추가했습니다.`);
+  }
+
   function openNewChatModal() {
     const others = state.accounts.filter((u) => u.id !== state.me.id);
     const overlay = document.createElement('div');
@@ -3696,6 +3770,16 @@
             <input type="text" id="grp-name" placeholder="예: 4월 현장조사 TF" />
           </div>
           <div class="field">
+            <label for="grp-project-number">프로젝트 번호</label>
+            <input type="text" id="grp-project-number" placeholder="예: 2025-31-1948" autocomplete="off" />
+            <div style="display:flex;gap:0.5rem;align-items:center;margin-top:0.5rem;flex-wrap:wrap">
+              <input type="search" id="grp-project-search" placeholder="프로젝트 검색 (번호/이름)" autocomplete="off" style="flex:1 1 14rem" />
+              <label class="btn btn-secondary btn-file" style="flex:0 0 auto">프로젝트 엑셀 업로드<input type="file" id="input-xlsx-projects" accept=".xlsx,.xls,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" /></label>
+            </div>
+            <div id="grp-project-results" class="devbulk-search-results" role="listbox" aria-label="프로젝트 검색 결과" style="margin-top:0.5rem"></div>
+            <p class="caption" style="margin-top:0.35rem">엑셀에 프로젝트 번호/프로젝트명 열이 있으면 가져와서 검색으로 선택할 수 있습니다. 선택하면 단체방 이름·프로젝트 번호가 자동 입력됩니다.</p>
+          </div>
+          <div class="field">
             <fieldset style="border:none;margin:0;padding:0;min-width:0">
             <legend style="font-size:0.8rem;color:var(--muted);margin-bottom:0.35rem;padding:0">멤버 선택</legend>
             <div class="newchat-member-scroll">
@@ -3716,6 +3800,10 @@
 
     const searchIn = overlay.querySelector('#newchat-search');
     const dmSelect = overlay.querySelector('#dm-select');
+    const projNumIn = overlay.querySelector('#grp-project-number');
+    const projSearchIn = overlay.querySelector('#grp-project-search');
+    const projResults = overlay.querySelector('#grp-project-results');
+    const projXlsxIn = overlay.querySelector('#input-xlsx-projects');
     function applyNewChatSearchFilter() {
       const q = searchIn.value || '';
       Array.from(dmSelect.options).forEach((opt, idx) => {
@@ -3787,6 +3875,7 @@
         alert('단체방 이름을 입력해 주세요.');
         return;
       }
+      const projectNumber = (projNumIn && projNumIn.value ? String(projNumIn.value) : '').trim();
       const ids = Array.from(overlay.querySelectorAll('#grp-members input:checked')).map((i) => i.value);
       const memberIds = [state.me.id, ...ids];
       if (memberIds.length < 2) {
@@ -3797,6 +3886,7 @@
         id: uid(),
         type: 'group',
         name,
+        projectNumber,
         memberIds,
         updatedAt: Date.now(),
         lastPreview: '방이 개설되었습니다',
@@ -3812,6 +3902,59 @@
       view.screen = 'chat';
       render();
     });
+
+    function renderProjectSearchResults() {
+      if (!projResults || !projSearchIn) return;
+      const q = (projSearchIn.value || '').trim().toLowerCase();
+      if (!q) {
+        projResults.innerHTML = '';
+        return;
+      }
+      const list = Array.isArray(state.projects) ? state.projects : [];
+      const hits = list
+        .filter((p) => {
+          const n = String(p.number || '').toLowerCase();
+          const nm = String(p.name || '').toLowerCase();
+          return n.includes(q) || nm.includes(q);
+        })
+        .slice(0, 50);
+      if (!hits.length) {
+        projResults.innerHTML = '<p class="hint" style="margin:0.35rem 0">일치하는 프로젝트가 없습니다.</p>';
+        return;
+      }
+      projResults.innerHTML = hits
+        .map((p) => {
+          const label = `${escapeHtml(p.number)} · ${escapeHtml(p.name || '')}`;
+          return `<button type="button" class="devbulk-search-pick" role="option" data-proj-pick="${escapeHtml(
+            p.number
+          )}" data-proj-name="${escapeHtml(p.name || '')}"><strong>${label}</strong></button>`;
+        })
+        .join('');
+    }
+
+    projSearchIn?.addEventListener('input', renderProjectSearchResults);
+    projResults?.addEventListener('click', (e) => {
+      const btn = e.target && e.target.closest ? e.target.closest('[data-proj-pick]') : null;
+      if (!btn) return;
+      const num = btn.getAttribute('data-proj-pick') || '';
+      const nm = btn.getAttribute('data-proj-name') || '';
+      if (projNumIn) projNumIn.value = num;
+      const grpNameIn = overlay.querySelector('#grp-name');
+      if (grpNameIn && !String(grpNameIn.value || '').trim()) grpNameIn.value = nm || num;
+      if (projSearchIn) projSearchIn.value = '';
+      if (projResults) projResults.innerHTML = '';
+      showToast('프로젝트를 선택했습니다.');
+    });
+
+    if (projXlsxIn) {
+      projXlsxIn.addEventListener('change', async () => {
+        const f = projXlsxIn.files && projXlsxIn.files[0];
+        projXlsxIn.value = '';
+        if (!f) return;
+        await importProjectsFromExcelFile(f);
+        renderProjectSearchResults();
+      });
+    }
   }
 
   function openAddAccountModal() {

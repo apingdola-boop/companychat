@@ -46,6 +46,8 @@ function sha256Hex(plain) {
 function emptyShared() {
   return {
     accounts: [],
+    /** 프로젝트 카탈로그: { number, name } */
+    projects: [],
     rooms: [],
     messages: {},
     feedbackThreads: [],
@@ -217,6 +219,7 @@ function mergeSharedUpdate(payload) {
   shared = {
     ...shared,
     accounts: Array.isArray(payload.accounts) ? payload.accounts : shared.accounts,
+    projects: Array.isArray(payload.projects) ? payload.projects : shared.projects,
     rooms: Array.isArray(payload.rooms) ? payload.rooms : shared.rooms,
     messages:
       payload.messages && typeof payload.messages === 'object'
