@@ -422,6 +422,7 @@
     }
     if (typeof room.roomNoticeTitle !== 'string') room.roomNoticeTitle = '';
     if (typeof room.roomNoticeBody !== 'string') room.roomNoticeBody = '';
+    if (room.type === 'group' && typeof room.projectNumber !== 'string') room.projectNumber = '';
   }
 
   /** 단체방만: 면접원은 연구원·슈퍼바이저가 허용하기 전까지 메시지·사진 전송 불가. 직원은 허용 토글과 무관하게 항상 전송 가능 */
@@ -2189,6 +2190,10 @@
   function guessProjectKeyForTrafficPayload(p) {
     const pn = p && p.projectNumber != null ? String(p.projectNumber).trim() : '';
     const pname = p && p.projectName != null ? String(p.projectName).trim() : '';
+    if (pn) {
+      const room = state.rooms.find((r) => r && r.type === 'group' && String(r.projectNumber || '').trim() === pn);
+      if (room && room.id) return String(room.id);
+    }
     if (pname) {
       const room = state.rooms.find((r) => r && r.type === 'group' && String(r.name || '').trim() === pname);
       if (room && room.id) return String(room.id);
@@ -2483,7 +2488,9 @@
       '<option value="">' + escapeHtml('전체 프로젝트 (단체방)') + '</option>',
       ...projectRooms.map((r) => {
         const sel = fil.roomId === r.id ? ' selected' : '';
-        return `<option value="${escapeHtml(r.id)}"${sel}>${escapeHtml(r.name || '이름 없음')}</option>`;
+        const pn = (r.projectNumber || '').trim();
+        const label = (pn ? pn + ' · ' : '') + (r.name || '이름 없음');
+        return `<option value="${escapeHtml(r.id)}"${sel}>${escapeHtml(label)}</option>`;
       }),
     ].join('');
     const teamOpts = [
@@ -2497,7 +2504,7 @@
 
     const ymSet = new Set();
     for (const iv of ivsAll) {
-      const rec = subs[iv.id];
+      const rec = subsFlat[iv.id];
       const at = rec && rec.at ? Number(rec.at) : 0;
       if (!at) continue;
       const d = new Date(at);
@@ -3568,6 +3575,51 @@
     });
   }
 
+  function openRoomProjectNumberModal(roomId) {
+    if (!canPostRoomModeration()) return;
+    const room = state.rooms.find((r) => r.id === roomId);
+    if (!room || room.type !== 'group') return;
+    normalizeRoomModeration(room);
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay centered';
+    overlay.innerHTML = `
+      <div class="modal centered-box" style="max-height:80vh">
+        <div class="modal-head">프로젝트 번호</div>
+        <div class="modal-body">
+          <div class="field">
+            <label for="room-proj-num">단체방 프로젝트 번호</label>
+            <input type="text" id="room-proj-num" placeholder="예: 2025-31-1948" autocomplete="off" />
+          </div>
+          <p class="hint">교통비 탭에서 프로젝트(단체방)를 고유하게 구분하는 번호입니다. 유류비 사이트에서 보낸 <strong>projectNumber</strong>와 일치하면 자동 매칭이 더 정확해집니다.</p>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" id="room-proj-cancel">닫기</button>
+          <button type="button" class="btn btn-primary" id="room-proj-save">저장</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    const inEl = overlay.querySelector('#room-proj-num');
+    inEl.value = room.projectNumber || '';
+    const close = () => {
+      overlay.remove();
+      view.modal = null;
+    };
+    overlay.querySelector('#room-proj-cancel').addEventListener('click', close);
+    overlay.querySelector('#room-proj-save').addEventListener('click', () => {
+      const v = (inEl.value || '').trim();
+      room.projectNumber = v;
+      room.updatedAt = Date.now();
+      saveState();
+      close();
+      render();
+      showToast('프로젝트 번호를 저장했습니다.');
+    });
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) close();
+    });
+  }
+
   function newChatMemberRowHtml(u) {
     return `<label class="newchat-mem-label" data-mem-id="${u.id}"><input type="checkbox" value="${u.id}" /><span class="check-list-txt">${escapeHtml(u.name)} · ${ROLES[u.role].label}${
       u.role === 'interviewer' && teamLabel(u.team) ? ' · ' + escapeHtml(teamLabel(u.team)) : ''
@@ -4488,9 +4540,14 @@
           }</button>`
         : '';
 
+    const projNumBtn =
+      showMod && room.type === 'group'
+        ? `<button type="button" class="btn-chat-mod" id="btn-room-project-number">프로젝트 번호</button>`
+        : '';
     const modRow = showMod
       ? `<div class="chat-mod-row">
           <button type="button" class="btn-chat-mod" id="btn-room-notice">방 공지</button>
+          ${projNumBtn}
           ${ivToggleBtn}
         </div>`
       : '';
@@ -4635,6 +4692,9 @@
 
     document.getElementById('btn-room-notice')?.addEventListener('click', () => {
       openRoomNoticeModal(view.roomId);
+    });
+    document.getElementById('btn-room-project-number')?.addEventListener('click', () => {
+      openRoomProjectNumberModal(view.roomId);
     });
     document.getElementById('btn-toggle-iv-chat')?.addEventListener('click', () => {
       const r = state.rooms.find((x) => x.id === view.roomId);
