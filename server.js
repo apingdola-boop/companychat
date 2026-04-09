@@ -33,6 +33,8 @@ const PUBLIC_URL_FILE = path.join(DATA_DIR, 'public-base-url.txt');
 
 const APP_STATE_TABLE = 'company_chat_app_state';
 const APP_STATE_ID = 'main';
+/** 올리면 서버·클라이언트가 예전 교통비 제출을 폐기하고, 구버전 동기화로 복구되지 않음 */
+const TRAFFIC_SCHEMA_VERSION = 2;
 
 function useSupabase() {
   const u = process.env.SUPABASE_URL && String(process.env.SUPABASE_URL).trim();
@@ -63,6 +65,8 @@ function emptyShared() {
     trafficExpenseSubmittedByIvProjectKey: {},
     /** 교통비 제출 표시 전역 초기화 시각(ms). 이 시각 이전 기록은 무시 */
     trafficExpenseResetAt: 0,
+    /** 교통비 저장 스키마(버전 낮은 클라이언트의 교통비 필드는 merge에서 무시) */
+    trafficExpenseDataVersion: TRAFFIC_SCHEMA_VERSION,
   };
 }
 
@@ -117,6 +121,17 @@ function trafficExpenseRecordActiveForGate(rec, gate) {
   const g = typeof gate === 'number' && Number.isFinite(gate) ? gate : 0;
   if (g > 0 && at < g) return false;
   return true;
+}
+
+function migrateTrafficExpenseSchemaIfNeeded(shared) {
+  if (!shared || typeof shared !== 'object') return;
+  const v = Number(shared.trafficExpenseDataVersion) || 0;
+  if (v >= TRAFFIC_SCHEMA_VERSION) return;
+  shared.trafficExpenseSubmittedByIvId = {};
+  shared.trafficExpenseSubmittedByIvProjectKey = {};
+  shared.trafficExpenseResetAt = Date.now();
+  shared.trafficExpenseDataVersion = TRAFFIC_SCHEMA_VERSION;
+  console.log('[H-채팅] 교통비 데이터 스키마 v' + TRAFFIC_SCHEMA_VERSION + ' 적용(기존 제출 일괄 삭제)');
 }
 
 function pruneTrafficMapsOnShared(shared) {
@@ -304,6 +319,14 @@ function mergeMessageMaps(serverMsgs, clientMsgs) {
   return out;
 }
 
+function cloneJsonObject(o) {
+  try {
+    return JSON.parse(JSON.stringify(o && typeof o === 'object' ? o : {}));
+  } catch (_) {
+    return {};
+  }
+}
+
 function mergeSharedUpdate(payload) {
   if (!payload || typeof payload !== 'object') return;
   const incomingResetAt =
@@ -312,6 +335,32 @@ function mergeSharedUpdate(payload) {
       : 0;
   const curResetAt = typeof shared.trafficExpenseResetAt === 'number' && Number.isFinite(shared.trafficExpenseResetAt) ? shared.trafficExpenseResetAt : 0;
   const nextResetAt = Math.max(curResetAt, incomingResetAt);
+  const incVer = Number(payload.trafficExpenseDataVersion) || 0;
+  const curVer = Number(shared.trafficExpenseDataVersion) || 0;
+
+  let trafficFlat;
+  let trafficProj;
+  let nextTrafficVer;
+  if (incVer < curVer) {
+    trafficFlat = shared.trafficExpenseSubmittedByIvId;
+    trafficProj = shared.trafficExpenseSubmittedByIvProjectKey;
+    nextTrafficVer = curVer;
+  } else if (incVer > curVer) {
+    trafficFlat = cloneJsonObject(payload.trafficExpenseSubmittedByIvId);
+    trafficProj = cloneJsonObject(payload.trafficExpenseSubmittedByIvProjectKey);
+    nextTrafficVer = incVer;
+  } else {
+    nextTrafficVer = curVer;
+    trafficFlat =
+      payload.trafficExpenseSubmittedByIvId && typeof payload.trafficExpenseSubmittedByIvId === 'object'
+        ? mergeTrafficExpenseMaps(shared.trafficExpenseSubmittedByIvId, payload.trafficExpenseSubmittedByIvId, nextResetAt)
+        : shared.trafficExpenseSubmittedByIvId;
+    trafficProj =
+      payload.trafficExpenseSubmittedByIvProjectKey && typeof payload.trafficExpenseSubmittedByIvProjectKey === 'object'
+        ? mergeTrafficExpenseProjectMaps(shared.trafficExpenseSubmittedByIvProjectKey, payload.trafficExpenseSubmittedByIvProjectKey, nextResetAt)
+        : shared.trafficExpenseSubmittedByIvProjectKey;
+  }
+
   shared = {
     ...shared,
     accounts: Array.isArray(payload.accounts) ? payload.accounts : shared.accounts,
@@ -341,14 +390,9 @@ function mergeSharedUpdate(payload) {
         ? payload.staffPresenceByUser
         : shared.staffPresenceByUser,
     trafficExpenseResetAt: nextResetAt,
-    trafficExpenseSubmittedByIvId:
-      payload.trafficExpenseSubmittedByIvId && typeof payload.trafficExpenseSubmittedByIvId === 'object'
-        ? mergeTrafficExpenseMaps(shared.trafficExpenseSubmittedByIvId, payload.trafficExpenseSubmittedByIvId, nextResetAt)
-        : shared.trafficExpenseSubmittedByIvId,
-    trafficExpenseSubmittedByIvProjectKey:
-      payload.trafficExpenseSubmittedByIvProjectKey && typeof payload.trafficExpenseSubmittedByIvProjectKey === 'object'
-        ? mergeTrafficExpenseProjectMaps(shared.trafficExpenseSubmittedByIvProjectKey, payload.trafficExpenseSubmittedByIvProjectKey, nextResetAt)
-        : shared.trafficExpenseSubmittedByIvProjectKey,
+    trafficExpenseDataVersion: nextTrafficVer,
+    trafficExpenseSubmittedByIvId: trafficFlat,
+    trafficExpenseSubmittedByIvProjectKey: trafficProj,
   };
   pruneTrafficMapsOnShared(shared);
 }
@@ -410,6 +454,7 @@ function initFromFile() {
   }
   ensureAccountsNonEmpty();
   ensureProjectsSeededIfEmpty();
+  migrateTrafficExpenseSchemaIfNeeded(shared);
   sanitizeTrafficMapsForResetGate(shared);
   saveSharedToDisk(shared);
 }
@@ -428,6 +473,7 @@ async function initFromSupabase() {
       if (!Array.isArray(migrated.accounts)) migrated.accounts = [];
       if (!migrated.accounts.length) migrated.accounts = seedDemoAccounts();
       shared = migrated;
+      migrateTrafficExpenseSchemaIfNeeded(shared);
       await saveSharedToSupabase();
       console.log('[H-채팅] 로컬 shared-state.json 을 Supabase 로 복사했습니다.');
       row = await loadSharedFromSupabase();
@@ -451,6 +497,7 @@ async function initFromSupabase() {
   if (!Array.isArray(shared.projects)) shared.projects = [];
   ensureAccountsNonEmpty();
   ensureProjectsSeededIfEmpty();
+  migrateTrafficExpenseSchemaIfNeeded(shared);
   sanitizeTrafficMapsForResetGate(shared);
 }
 

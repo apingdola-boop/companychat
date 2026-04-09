@@ -8,6 +8,8 @@
   const LS_EXTRA_MAIN_TABS = 'company-chat-extra-main-tabs';
   /** 유류비 단독 탭 → Supabase `traffic_submission_signals` 처리 완료 row id */
   const LS_TRAFFIC_BRIDGE_IDS = 'company-chat-traffic-bridge-done-ids';
+  /** 서버·로컬 예전 교통비 일괄 삭제 + 구버전 탭이 데이터를 되살리지 못하게 함(올리면 다시 전체 초기화) */
+  const TRAFFIC_SCHEMA_VERSION = 2;
 
   function getExtraMainTabsOpen() {
     try {
@@ -741,6 +743,7 @@
       trafficExpenseSubmittedByIvProjectKey: {},
       /** 교통비 제출 표시 전역 초기화 시각(ms). 이 시각 이전 기록은 무시 */
       trafficExpenseResetAt: 0,
+      trafficExpenseDataVersion: TRAFFIC_SCHEMA_VERSION,
     };
   }
 
@@ -801,9 +804,20 @@
         typeof data.trafficExpenseResetAt === 'number' && Number.isFinite(data.trafficExpenseResetAt)
           ? data.trafficExpenseResetAt
           : 0,
+      trafficExpenseDataVersion:
+        typeof data.trafficExpenseDataVersion === 'number' && Number.isFinite(data.trafficExpenseDataVersion)
+          ? data.trafficExpenseDataVersion
+          : 0,
       _migrateV1: fromV1 || (!!data.directory && !data.accounts),
     };
     if (data.directory && !base.accounts.length) base._legacyDirectory = data.directory;
+    if ((base.trafficExpenseDataVersion | 0) < TRAFFIC_SCHEMA_VERSION) {
+      base.trafficExpenseSubmittedByIvId = {};
+      base.trafficExpenseSubmittedByIvProjectKey = {};
+      base.trafficExpenseResetAt = Date.now();
+      base.trafficExpenseDataVersion = TRAFFIC_SCHEMA_VERSION;
+      base._trafficSchemaMigrated = true;
+    }
     const tGate = base.trafficExpenseResetAt;
     if (tGate > 0) {
       base.trafficExpenseSubmittedByIvId = mergeTrafficExpenseMaps(base.trafficExpenseSubmittedByIvId || {}, {}, tGate);
@@ -822,6 +836,17 @@
   }
 
   let state = loadState();
+  try {
+    if (state._trafficSchemaMigrated) {
+      delete state._trafficSchemaMigrated;
+      queueMicrotask(function () {
+        try {
+          saveState();
+        } catch (_) {}
+      });
+    }
+  } catch (_) {}
+
   let view = {
     screen: 'login',
     tab: 'chats',
@@ -1064,6 +1089,7 @@
       trafficExpenseSubmittedByIvId: state.trafficExpenseSubmittedByIvId || {},
       trafficExpenseSubmittedByIvProjectKey: state.trafficExpenseSubmittedByIvProjectKey || {},
       trafficExpenseResetAt: typeof state.trafficExpenseResetAt === 'number' ? state.trafficExpenseResetAt : 0,
+      trafficExpenseDataVersion: Number(state.trafficExpenseDataVersion) || TRAFFIC_SCHEMA_VERSION,
     };
   }
 
@@ -1087,6 +1113,8 @@
 
   function applySharedPayload(payload) {
     if (!payload || typeof payload !== 'object') return;
+    const pVerTraffic = Number(payload.trafficExpenseDataVersion) || 0;
+    const sVerTraffic = Number(state.trafficExpenseDataVersion) || 0;
     const incomingResetAt =
       typeof payload.trafficExpenseResetAt === 'number' && Number.isFinite(payload.trafficExpenseResetAt)
         ? payload.trafficExpenseResetAt
@@ -1112,24 +1140,51 @@
         : {};
     state.staffPresenceByUser =
       payload.staffPresenceByUser && typeof payload.staffPresenceByUser === 'object' ? payload.staffPresenceByUser : {};
-    if (payload.trafficExpenseSubmittedByIvId && typeof payload.trafficExpenseSubmittedByIvId === 'object') {
-      state.trafficExpenseSubmittedByIvId = mergeTrafficExpenseMaps(
-        state.trafficExpenseSubmittedByIvId,
-        payload.trafficExpenseSubmittedByIvId,
-        state.trafficExpenseResetAt
+
+    if (pVerTraffic < sVerTraffic) {
+      /* 페이로드가 구 스키마 — 교통비 필드는 적용하지 않음(옛 제출 부활 방지) */
+    } else if (pVerTraffic > sVerTraffic) {
+      const clFlat =
+        payload.trafficExpenseSubmittedByIvId && typeof payload.trafficExpenseSubmittedByIvId === 'object'
+          ? JSON.parse(JSON.stringify(payload.trafficExpenseSubmittedByIvId))
+          : {};
+      const clProj =
+        payload.trafficExpenseSubmittedByIvProjectKey && typeof payload.trafficExpenseSubmittedByIvProjectKey === 'object'
+          ? JSON.parse(JSON.stringify(payload.trafficExpenseSubmittedByIvProjectKey))
+          : {};
+      state.trafficExpenseDataVersion = pVerTraffic;
+      state.trafficExpenseSubmittedByIvId = clFlat;
+      state.trafficExpenseSubmittedByIvProjectKey = clProj;
+      state.trafficExpenseResetAt = Math.max(
+        state.trafficExpenseResetAt,
+        typeof payload.trafficExpenseResetAt === 'number' && Number.isFinite(payload.trafficExpenseResetAt)
+          ? payload.trafficExpenseResetAt
+          : 0
       );
-    } else if (!state.trafficExpenseSubmittedByIvId) {
-      state.trafficExpenseSubmittedByIvId = {};
+    } else {
+      if (payload.trafficExpenseSubmittedByIvId && typeof payload.trafficExpenseSubmittedByIvId === 'object') {
+        state.trafficExpenseSubmittedByIvId = mergeTrafficExpenseMaps(
+          state.trafficExpenseSubmittedByIvId,
+          payload.trafficExpenseSubmittedByIvId,
+          state.trafficExpenseResetAt
+        );
+      } else if (!state.trafficExpenseSubmittedByIvId) {
+        state.trafficExpenseSubmittedByIvId = {};
+      }
+      if (payload.trafficExpenseSubmittedByIvProjectKey && typeof payload.trafficExpenseSubmittedByIvProjectKey === 'object') {
+        state.trafficExpenseSubmittedByIvProjectKey = mergeTrafficExpenseProjectMaps(
+          state.trafficExpenseSubmittedByIvProjectKey || {},
+          payload.trafficExpenseSubmittedByIvProjectKey,
+          state.trafficExpenseResetAt
+        );
+      } else if (!state.trafficExpenseSubmittedByIvProjectKey) {
+        state.trafficExpenseSubmittedByIvProjectKey = {};
+      }
+      if (typeof state.trafficExpenseDataVersion !== 'number' || !Number.isFinite(state.trafficExpenseDataVersion)) {
+        state.trafficExpenseDataVersion = TRAFFIC_SCHEMA_VERSION;
+      }
     }
-    if (payload.trafficExpenseSubmittedByIvProjectKey && typeof payload.trafficExpenseSubmittedByIvProjectKey === 'object') {
-      state.trafficExpenseSubmittedByIvProjectKey = mergeTrafficExpenseProjectMaps(
-        state.trafficExpenseSubmittedByIvProjectKey || {},
-        payload.trafficExpenseSubmittedByIvProjectKey,
-        state.trafficExpenseResetAt
-      );
-    } else if (!state.trafficExpenseSubmittedByIvProjectKey) {
-      state.trafficExpenseSubmittedByIvProjectKey = {};
-    }
+
     pruneTrafficExpenseMapsObject(
       state.trafficExpenseSubmittedByIvId,
       state.trafficExpenseSubmittedByIvProjectKey,
@@ -1259,6 +1314,7 @@
         trafficExpenseSubmittedByIvId: state.trafficExpenseSubmittedByIvId || {},
         trafficExpenseSubmittedByIvProjectKey: state.trafficExpenseSubmittedByIvProjectKey || {},
         trafficExpenseResetAt: typeof state.trafficExpenseResetAt === 'number' ? state.trafficExpenseResetAt : 0,
+        trafficExpenseDataVersion: Number(state.trafficExpenseDataVersion) || TRAFFIC_SCHEMA_VERSION,
       };
       localStorage.setItem(STORAGE_V2, JSON.stringify(persist));
       if (localStorage.getItem(STORAGE_V1)) localStorage.removeItem(STORAGE_V1);
@@ -1270,6 +1326,7 @@
 
   function resetAllTrafficExpenseSubmissions() {
     state.trafficExpenseResetAt = Date.now();
+    state.trafficExpenseDataVersion = TRAFFIC_SCHEMA_VERSION;
     state.trafficExpenseSubmittedByIvId = {};
     state.trafficExpenseSubmittedByIvProjectKey = {};
     try {
@@ -2287,6 +2344,8 @@
     if (!id) return false;
     const acc = state.accounts.find((a) => a.id === id && a.role === 'interviewer');
     if (!acc) return false;
+    if (!Number.isFinite(state.trafficExpenseDataVersion) || state.trafficExpenseDataVersion < TRAFFIC_SCHEMA_VERSION)
+      state.trafficExpenseDataVersion = TRAFFIC_SCHEMA_VERSION;
     if (!state.trafficExpenseSubmittedByIvId || typeof state.trafficExpenseSubmittedByIvId !== 'object')
       state.trafficExpenseSubmittedByIvId = {};
     const record = {
@@ -2335,6 +2394,8 @@
     if (!id || !pk) return false;
     const acc = state.accounts.find((a) => a.id === id && a.role === 'interviewer');
     if (!acc) return false;
+    if (!Number.isFinite(state.trafficExpenseDataVersion) || state.trafficExpenseDataVersion < TRAFFIC_SCHEMA_VERSION)
+      state.trafficExpenseDataVersion = TRAFFIC_SCHEMA_VERSION;
     if (!state.trafficExpenseSubmittedByIvProjectKey || typeof state.trafficExpenseSubmittedByIvProjectKey !== 'object')
       state.trafficExpenseSubmittedByIvProjectKey = {};
     if (!state.trafficExpenseSubmittedByIvProjectKey[id] || typeof state.trafficExpenseSubmittedByIvProjectKey[id] !== 'object')
@@ -2613,6 +2674,10 @@
     if (ev.key !== STORAGE_V2 || !ev.newValue || ev.storageArea !== localStorage) return;
     try {
       const data = JSON.parse(ev.newValue);
+      const dVer = Number(data.trafficExpenseDataVersion) || 0;
+      const sVer = Number(state.trafficExpenseDataVersion) || 0;
+      if (dVer < sVer) return;
+
       const incomingResetAt =
         typeof data.trafficExpenseResetAt === 'number' && Number.isFinite(data.trafficExpenseResetAt) ? data.trafficExpenseResetAt : 0;
       const curResetAt =
@@ -2624,6 +2689,21 @@
       const incFlat = data.trafficExpenseSubmittedByIvId;
       const incProj = data.trafficExpenseSubmittedByIvProjectKey;
       let changed = false;
+
+      if (dVer > sVer) {
+        state.trafficExpenseDataVersion = dVer;
+        state.trafficExpenseSubmittedByIvId =
+          incFlat && typeof incFlat === 'object' ? JSON.parse(JSON.stringify(incFlat)) : {};
+        state.trafficExpenseSubmittedByIvProjectKey =
+          incProj && typeof incProj === 'object' ? JSON.parse(JSON.stringify(incProj)) : {};
+        pruneTrafficExpenseMapsObject(
+          state.trafficExpenseSubmittedByIvId,
+          state.trafficExpenseSubmittedByIvProjectKey,
+          state.trafficExpenseResetAt
+        );
+        if (view.screen === 'main' && view.tab === 'traffic') render();
+        return;
+      }
 
       if (incFlat && typeof incFlat === 'object') {
         const merged = mergeTrafficExpenseMaps(state.trafficExpenseSubmittedByIvId, incFlat, state.trafficExpenseResetAt);
