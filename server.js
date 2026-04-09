@@ -110,19 +110,55 @@ function mergeTrafficExpenseProjectMaps(base, incoming, resetAt) {
 }
 
 /** 디스크/DB에 리셋 시각만 맞고 맵이 남아 있던 과거 버그 복구 */
+function trafficExpenseRecordActiveForGate(rec, gate) {
+  if (!rec || typeof rec !== 'object' || rec.cleared) return false;
+  const at = Number(rec.at) || 0;
+  if (at <= 0) return false;
+  const g = typeof gate === 'number' && Number.isFinite(gate) ? gate : 0;
+  if (g > 0 && at < g) return false;
+  return true;
+}
+
+function pruneTrafficMapsOnShared(shared) {
+  if (!shared || typeof shared !== 'object') return;
+  const gate =
+    typeof shared.trafficExpenseResetAt === 'number' && Number.isFinite(shared.trafficExpenseResetAt)
+      ? shared.trafficExpenseResetAt
+      : 0;
+  const flat = shared.trafficExpenseSubmittedByIvId;
+  if (flat && typeof flat === 'object') {
+    for (const id of Object.keys(flat)) {
+      if (!trafficExpenseRecordActiveForGate(flat[id], gate)) delete flat[id];
+    }
+  }
+  const proj = shared.trafficExpenseSubmittedByIvProjectKey;
+  if (proj && typeof proj === 'object') {
+    for (const ivId of Object.keys(proj)) {
+      const mp = proj[ivId];
+      if (!mp || typeof mp !== 'object') continue;
+      for (const pk of Object.keys(mp)) {
+        if (!trafficExpenseRecordActiveForGate(mp[pk], gate)) delete mp[pk];
+      }
+      if (Object.keys(mp).length === 0) delete proj[ivId];
+    }
+  }
+}
+
 function sanitizeTrafficMapsForResetGate(shared) {
   if (!shared || typeof shared !== 'object') return;
   const gate =
     typeof shared.trafficExpenseResetAt === 'number' && Number.isFinite(shared.trafficExpenseResetAt)
       ? shared.trafficExpenseResetAt
       : 0;
-  if (gate <= 0) return;
-  shared.trafficExpenseSubmittedByIvId = mergeTrafficExpenseMaps(shared.trafficExpenseSubmittedByIvId || {}, {}, gate);
-  shared.trafficExpenseSubmittedByIvProjectKey = mergeTrafficExpenseProjectMaps(
-    shared.trafficExpenseSubmittedByIvProjectKey || {},
-    {},
-    gate
-  );
+  if (gate > 0) {
+    shared.trafficExpenseSubmittedByIvId = mergeTrafficExpenseMaps(shared.trafficExpenseSubmittedByIvId || {}, {}, gate);
+    shared.trafficExpenseSubmittedByIvProjectKey = mergeTrafficExpenseProjectMaps(
+      shared.trafficExpenseSubmittedByIvProjectKey || {},
+      {},
+      gate
+    );
+  }
+  pruneTrafficMapsOnShared(shared);
 }
 
 function seedDemoAccounts() {
@@ -314,6 +350,7 @@ function mergeSharedUpdate(payload) {
         ? mergeTrafficExpenseProjectMaps(shared.trafficExpenseSubmittedByIvProjectKey, payload.trafficExpenseSubmittedByIvProjectKey, nextResetAt)
         : shared.trafficExpenseSubmittedByIvProjectKey,
   };
+  pruneTrafficMapsOnShared(shared);
 }
 
 function migrateInterviewerChatRoomDefault() {

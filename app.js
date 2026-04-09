@@ -333,6 +333,41 @@
     return out;
   }
 
+  /**
+   * 교통비 제출 1건이 현재 유효한지. cleared·타임스탬프 없음·전역 초기화(trafficExpenseResetAt) 이전이면 무효.
+   * loadState 시에는 gate 인자에 반드시 해당 객체의 trafficExpenseResetAt를 넘긴다(state 미할당).
+   */
+  function isTrafficExpenseSubmissionActive(rec, resetAtGate) {
+    if (!rec || typeof rec !== 'object') return false;
+    if (rec.cleared) return false;
+    const at = Number(rec.at) || 0;
+    if (at <= 0) return false;
+    let gate = 0;
+    if (typeof resetAtGate === 'number' && Number.isFinite(resetAtGate)) gate = resetAtGate;
+    else if (typeof state.trafficExpenseResetAt === 'number' && Number.isFinite(state.trafficExpenseResetAt))
+      gate = state.trafficExpenseResetAt;
+    if (gate > 0 && at < gate) return false;
+    return true;
+  }
+
+  function pruneTrafficExpenseMapsObject(flat, projectByIv, gate) {
+    if (flat && typeof flat === 'object') {
+      for (const id of Object.keys(flat)) {
+        if (!isTrafficExpenseSubmissionActive(flat[id], gate)) delete flat[id];
+      }
+    }
+    if (projectByIv && typeof projectByIv === 'object') {
+      for (const ivId of Object.keys(projectByIv)) {
+        const mp = projectByIv[ivId];
+        if (!mp || typeof mp !== 'object') continue;
+        for (const pk of Object.keys(mp)) {
+          if (!isTrafficExpenseSubmissionActive(mp[pk], gate)) delete mp[pk];
+        }
+        if (Object.keys(mp).length === 0) delete projectByIv[ivId];
+      }
+    }
+  }
+
   const TEAM_ORDER = ['quant1', 'quant2', 'busan', 'daegu', 'daejeon', 'gwangju'];
   const TEAMS = {
     quant1: '정량조사부 1팀',
@@ -778,6 +813,11 @@
         tGate
       );
     }
+    pruneTrafficExpenseMapsObject(
+      base.trafficExpenseSubmittedByIvId,
+      base.trafficExpenseSubmittedByIvProjectKey,
+      base.trafficExpenseResetAt
+    );
     return base;
   }
 
@@ -1090,6 +1130,11 @@
     } else if (!state.trafficExpenseSubmittedByIvProjectKey) {
       state.trafficExpenseSubmittedByIvProjectKey = {};
     }
+    pruneTrafficExpenseMapsObject(
+      state.trafficExpenseSubmittedByIvId,
+      state.trafficExpenseSubmittedByIvProjectKey,
+      state.trafficExpenseResetAt
+    );
     syncSessionMeWithAccounts();
   }
 
@@ -1227,6 +1272,9 @@
     state.trafficExpenseResetAt = Date.now();
     state.trafficExpenseSubmittedByIvId = {};
     state.trafficExpenseSubmittedByIvProjectKey = {};
+    try {
+      localStorage.removeItem(LS_TRAFFIC_BRIDGE_IDS);
+    } catch (_) {}
     saveState();
     showToast('교통비 제출 표시를 전체 초기화했습니다.');
     if (view.screen === 'main' && view.tab === 'traffic') render();
@@ -2478,19 +2526,25 @@
         const r = mp[pnKey];
         const rpn = String(r.projectNumber || '').trim();
         if (rpn && rpn !== expectedPn) return null;
-        return r;
+        return isTrafficExpenseSubmissionActive(r) ? r : null;
       }
       if (mp[room.id] && typeof mp[room.id] === 'object') {
         const r = mp[room.id];
         const rpn = String(r.projectNumber || '').trim();
-        if (rpn === expectedPn) return r;
+        if (rpn === expectedPn) return isTrafficExpenseSubmissionActive(r) ? r : null;
         return null;
       }
       return null;
     }
 
-    if (mp[roomScopedKey] && typeof mp[roomScopedKey] === 'object') return mp[roomScopedKey];
-    if (mp[room.id] && typeof mp[room.id] === 'object') return mp[room.id];
+    if (mp[roomScopedKey] && typeof mp[roomScopedKey] === 'object') {
+      const r = mp[roomScopedKey];
+      return isTrafficExpenseSubmissionActive(r) ? r : null;
+    }
+    if (mp[room.id] && typeof mp[room.id] === 'object') {
+      const r = mp[room.id];
+      return isTrafficExpenseSubmissionActive(r) ? r : null;
+    }
     return null;
   }
 
@@ -2590,6 +2644,21 @@
           changed = true;
         }
       }
+
+      const snapBefore =
+        JSON.stringify(state.trafficExpenseSubmittedByIvId || {}) +
+        '|' +
+        JSON.stringify(state.trafficExpenseSubmittedByIvProjectKey || {});
+      pruneTrafficExpenseMapsObject(
+        state.trafficExpenseSubmittedByIvId,
+        state.trafficExpenseSubmittedByIvProjectKey,
+        state.trafficExpenseResetAt
+      );
+      const snapAfter =
+        JSON.stringify(state.trafficExpenseSubmittedByIvId || {}) +
+        '|' +
+        JSON.stringify(state.trafficExpenseSubmittedByIvProjectKey || {});
+      if (snapBefore !== snapAfter) changed = true;
 
       if (!changed && incomingResetAt <= curResetAt) return;
       if (view.screen === 'main' && view.tab === 'traffic') render();
@@ -2769,6 +2838,7 @@
     const ymSet = new Set();
     for (const iv of ivsAll) {
       const rec = subsFlat[iv.id];
+      if (!isTrafficExpenseSubmissionActive(rec)) continue;
       const at = rec && rec.at ? Number(rec.at) : 0;
       if (!at) continue;
       const d = new Date(at);
@@ -2792,14 +2862,15 @@
       activeProjectRoomId ? state.rooms.find((r) => r.id === activeProjectRoomId && r.type === 'group') : null;
 
     function oneRow(uv) {
-      const rec =
+      let rec =
         activeProjectRoom && subsByProj[uv.id] && typeof subsByProj[uv.id] === 'object'
           ? pickTrafficRecordForProjectRoom(subsByProj[uv.id], activeProjectRoom)
           : !activeProjectRoomId
             ? subsFlat[uv.id]
             : null;
+      if (rec && !isTrafficExpenseSubmissionActive(rec)) rec = null;
       const at = rec && rec.at ? Number(rec.at) : 0;
-      const submitted = at > 0 && !(rec && rec.cleared);
+      const submitted = !!rec;
       const status = submitted
         ? `<span class="traffic-cell-status traffic-cell-status--ok">제출 완료 · ${escapeHtml(formatTime(at))}</span>`
         : `<span class="traffic-cell-status traffic-cell-status--no">미제출</span>`;
