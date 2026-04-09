@@ -1159,7 +1159,7 @@
     const encO = encodeURIComponent(origin);
     const visO = escapeHtml(origin);
     return `<div class="lan-access-banner lan-access-banner--compact">
-      <p class="hint"><strong>같은 Wi-Fi</strong>의 다른 기기에서는 이 주소를 입력하면 됩니다.</p>
+      <p class="hint">다른 기기에서도 <strong>이 주소</strong>로 접속하면 대화할 수 있습니다.</p>
       <p class="lan-access-row"><code>${visO}</code> <button type="button" class="btn btn-ghost btn-lan-copy" data-copy-lan="${encO}">복사</button></p>
     </div>`;
   }
