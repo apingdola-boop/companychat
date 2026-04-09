@@ -2158,6 +2158,17 @@ html[data-theme='light'] .devbulk-grid thead th {
   color: var(--muted);
 }
 
+.traffic-sheet-hint {
+  margin: 0 0 0.65rem;
+  font-size: 0.76rem;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.traffic-sheet-hint code {
+  font-size: 0.9em;
+}
+
 .traffic-stat-ok {
   color: var(--researcher);
 }

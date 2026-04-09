@@ -2437,35 +2437,34 @@
     return String(room.name || '프로젝트').trim() || '프로젝트';
   }
 
-  /** 프로젝트(단체방) 필터가 켜져 있을 때만: 저장맵에서 "이 프로젝트 번호"에 해당하는 레코드만 고름 */
+  /**
+   * 프로젝트(단체방) 필터: 면접원 1명당 "선택한 방의 projectNumber"와 저장된 제출의 projectNumber(또는 pn: 키)가
+   * 정확히 맞을 때만 제출 완료로 표시. 전체 맵 스캔 폴백은 제거해 프로젝트 간 오표시를 막음.
+   */
   function pickTrafficRecordForProjectRoom(mp, room) {
     if (!mp || typeof mp !== 'object' || !room || room.type !== 'group') return null;
     const expectedPn = String(room.projectNumber || '').trim();
-    const primaryKey = expectedPn ? 'pn:' + expectedPn : 'room:' + String(room.id);
-    const tryRec = (r, keyUsed) => {
-      if (!r || typeof r !== 'object') return null;
-      if (!expectedPn) return r;
-      const rpn = String(r.projectNumber || '').trim();
-      if (rpn) return rpn === expectedPn ? r : null;
-      // projectNumber 없는 레거시: "아무 프로젝트나"에 걸리면 안 됨 → 키가 이 방과 정확히 대응될 때만
-      if (keyUsed === primaryKey || keyUsed === room.id) return r;
-      return null;
-    };
-    if (mp[primaryKey]) {
-      const got = tryRec(mp[primaryKey], primaryKey);
-      if (got) return got;
-    }
-    if (mp[room.id]) {
-      const got = tryRec(mp[room.id], room.id);
-      if (got) return got;
-    }
+    const roomScopedKey = 'room:' + String(room.id);
+
     if (expectedPn) {
-      for (const k of Object.keys(mp)) {
-        const r = mp[k];
-        const got = tryRec(r, k);
-        if (got && String((got.projectNumber || '').trim()) === expectedPn) return got;
+      const pnKey = 'pn:' + expectedPn;
+      if (mp[pnKey] && typeof mp[pnKey] === 'object') {
+        const r = mp[pnKey];
+        const rpn = String(r.projectNumber || '').trim();
+        if (rpn && rpn !== expectedPn) return null;
+        return r;
       }
+      if (mp[room.id] && typeof mp[room.id] === 'object') {
+        const r = mp[room.id];
+        const rpn = String(r.projectNumber || '').trim();
+        if (rpn === expectedPn) return r;
+        return null;
+      }
+      return null;
     }
+
+    if (mp[roomScopedKey] && typeof mp[roomScopedKey] === 'object') return mp[roomScopedKey];
+    if (mp[room.id] && typeof mp[room.id] === 'object') return mp[room.id];
     return null;
   }
 
@@ -2906,6 +2905,7 @@
               <select id="traffic-filter-room" class="traffic-filter-select">${roomOpts}</select></label>
           </div>
           <p id="traffic-filter-stats" class="traffic-filter-stats" aria-live="polite"></p>
+          <p class="traffic-sheet-hint">프로젝트를 바꾸면 표가 그 프로젝트 번호(단체방 설정)와 저장된 제출의 <code>projectNumber</code>가 동일한 경우에만 &quot;제출 완료&quot;로 다시 계산됩니다. 여러 방에 같은 프로젝트 번호가 들어 있으면 한 제출이 둘 다에 표시됩니다.</p>
           <div class="traffic-expense-table-scroll">
             <table class="traffic-expense-grid">
               <thead>
@@ -3014,8 +3014,13 @@
       run();
     });
     roomEl.addEventListener('change', () => {
+      // 프로젝트(단체방)마다 제출 레코드 매칭이 달라지므로 행 HTML 자체를 다시 생성해야 함.
+      // applyTrafficExpenseFilters만 쓰면 가시성·집계만 바뀌고 제출/미제출 셀이 이전 방 기준으로 남는다.
+      view.trafficListFilter.q = qEl.value;
+      view.trafficListFilter.ym = ymEl.value;
+      view.trafficListFilter.team = teamEl.value;
       view.trafficListFilter.roomId = roomEl.value;
-      run();
+      render();
     });
     run();
   }
