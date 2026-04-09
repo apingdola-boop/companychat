@@ -67,9 +67,17 @@ function emptyShared() {
 }
 
 function mergeTrafficExpenseMaps(base, incoming, resetAt) {
-  const out = { ...(base && typeof base === 'object' ? base : {}) };
-  if (!incoming || typeof incoming !== 'object') return out;
   const gate = typeof resetAt === 'number' && Number.isFinite(resetAt) ? resetAt : 0;
+  const out = {};
+  if (base && typeof base === 'object') {
+    for (const k of Object.keys(base)) {
+      const va = base[k];
+      const ta = va && typeof va === 'object' ? Number(va.at) || 0 : 0;
+      if (gate > 0 && ta > 0 && ta < gate) continue;
+      out[k] = va;
+    }
+  }
+  if (!incoming || typeof incoming !== 'object') return out;
   for (const k of Object.keys(incoming)) {
     const vb = incoming[k];
     const va = out[k];
@@ -78,25 +86,43 @@ function mergeTrafficExpenseMaps(base, incoming, resetAt) {
     const cb = vb && typeof vb === 'object' ? !!vb.cleared : false;
     const ca = va && typeof va === 'object' ? !!va.cleared : false;
     if (gate > 0 && tb > 0 && tb < gate) continue;
-    // 기기 시간차로 취소가 더 "과거"로 찍혀도, 근접한 경우(10분)는 취소 우선
     if (cb && !ca && tb > 0 && ta > 0 && ta - tb <= 10 * 60 * 1000) {
       out[k] = vb;
       continue;
     }
-    if (tb >= ta) out[k] = vb;
+    if (tb >= ta || (gate > 0 && ta > 0 && ta < gate && tb > 0)) out[k] = vb;
   }
   return out;
 }
 
 function mergeTrafficExpenseProjectMaps(base, incoming, resetAt) {
-  const out = { ...(base && typeof base === 'object' ? base : {}) };
-  if (!incoming || typeof incoming !== 'object') return out;
-  for (const ivId of Object.keys(incoming)) {
-    const cur = out[ivId] && typeof out[ivId] === 'object' ? out[ivId] : {};
-    const inc = incoming[ivId] && typeof incoming[ivId] === 'object' ? incoming[ivId] : {};
-    out[ivId] = mergeTrafficExpenseMaps(cur, inc, resetAt);
+  const out = {};
+  const b = base && typeof base === 'object' ? base : {};
+  const inc = incoming && typeof incoming === 'object' ? incoming : {};
+  const keys = new Set([...Object.keys(b), ...Object.keys(inc)]);
+  for (const ivId of keys) {
+    const cur = b[ivId] && typeof b[ivId] === 'object' ? b[ivId] : {};
+    const incIv = inc[ivId] && typeof inc[ivId] === 'object' ? inc[ivId] : {};
+    const merged = mergeTrafficExpenseMaps(cur, incIv, resetAt);
+    if (Object.keys(merged).length > 0) out[ivId] = merged;
   }
   return out;
+}
+
+/** 디스크/DB에 리셋 시각만 맞고 맵이 남아 있던 과거 버그 복구 */
+function sanitizeTrafficMapsForResetGate(shared) {
+  if (!shared || typeof shared !== 'object') return;
+  const gate =
+    typeof shared.trafficExpenseResetAt === 'number' && Number.isFinite(shared.trafficExpenseResetAt)
+      ? shared.trafficExpenseResetAt
+      : 0;
+  if (gate <= 0) return;
+  shared.trafficExpenseSubmittedByIvId = mergeTrafficExpenseMaps(shared.trafficExpenseSubmittedByIvId || {}, {}, gate);
+  shared.trafficExpenseSubmittedByIvProjectKey = mergeTrafficExpenseProjectMaps(
+    shared.trafficExpenseSubmittedByIvProjectKey || {},
+    {},
+    gate
+  );
 }
 
 function seedDemoAccounts() {
@@ -347,6 +373,7 @@ function initFromFile() {
   }
   ensureAccountsNonEmpty();
   ensureProjectsSeededIfEmpty();
+  sanitizeTrafficMapsForResetGate(shared);
   saveSharedToDisk(shared);
 }
 
@@ -387,6 +414,7 @@ async function initFromSupabase() {
   if (!Array.isArray(shared.projects)) shared.projects = [];
   ensureAccountsNonEmpty();
   ensureProjectsSeededIfEmpty();
+  sanitizeTrafficMapsForResetGate(shared);
 }
 
 function localIPv4s() {

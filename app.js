@@ -289,9 +289,17 @@
   }
 
   function mergeTrafficExpenseMaps(base, incoming, resetAt) {
-    const out = { ...(base && typeof base === 'object' ? base : {}) };
-    if (!incoming || typeof incoming !== 'object') return out;
     const gate = typeof resetAt === 'number' && Number.isFinite(resetAt) ? resetAt : 0;
+    const out = {};
+    if (base && typeof base === 'object') {
+      for (const k of Object.keys(base)) {
+        const va = base[k];
+        const ta = va && typeof va === 'object' ? Number(va.at) || 0 : 0;
+        if (gate > 0 && ta > 0 && ta < gate) continue;
+        out[k] = va;
+      }
+    }
+    if (!incoming || typeof incoming !== 'object') return out;
     for (const k of Object.keys(incoming)) {
       const vb = incoming[k];
       const va = out[k];
@@ -300,16 +308,27 @@
       const cb = vb && typeof vb === 'object' ? !!vb.cleared : false;
       const ca = va && typeof va === 'object' ? !!va.cleared : false;
       if (gate > 0 && tb > 0 && tb < gate) continue;
-      if (gate > 0 && ta > 0 && ta < gate) {
-        // 리셋 이전 값은 더 이상 의미가 없으므로 비교를 쉽게 하기 위해 ta를 0처럼 취급
-        // (out[k]는 아래 조건에서 vb로 덮어쓰기 될 수 있음)
-      }
       // 기기 시간차로 취소가 더 "과거"로 찍혀도, 근접한 경우(10분)는 취소 우선
       if (cb && !ca && tb > 0 && ta > 0 && ta - tb <= 10 * 60 * 1000) {
         out[k] = vb;
         continue;
       }
       if (tb >= ta || (gate > 0 && ta > 0 && ta < gate && tb > 0)) out[k] = vb;
+    }
+    return out;
+  }
+
+  /** 면접원 id별 교통비 맵 병합. payload가 빈 객체여도 base 쪽 리셋 이전 기록은 제거된다. */
+  function mergeTrafficExpenseProjectMaps(base, incoming, resetAt) {
+    const out = {};
+    const b = base && typeof base === 'object' ? base : {};
+    const inc = incoming && typeof incoming === 'object' ? incoming : {};
+    const keys = new Set([...Object.keys(b), ...Object.keys(inc)]);
+    for (const ivId of keys) {
+      const cur = b[ivId] && typeof b[ivId] === 'object' ? b[ivId] : {};
+      const incIv = inc[ivId] && typeof inc[ivId] === 'object' ? inc[ivId] : {};
+      const merged = mergeTrafficExpenseMaps(cur, incIv, resetAt);
+      if (Object.keys(merged).length > 0) out[ivId] = merged;
     }
     return out;
   }
@@ -750,6 +769,15 @@
       _migrateV1: fromV1 || (!!data.directory && !data.accounts),
     };
     if (data.directory && !base.accounts.length) base._legacyDirectory = data.directory;
+    const tGate = base.trafficExpenseResetAt;
+    if (tGate > 0) {
+      base.trafficExpenseSubmittedByIvId = mergeTrafficExpenseMaps(base.trafficExpenseSubmittedByIvId || {}, {}, tGate);
+      base.trafficExpenseSubmittedByIvProjectKey = mergeTrafficExpenseProjectMaps(
+        base.trafficExpenseSubmittedByIvProjectKey || {},
+        {},
+        tGate
+      );
+    }
     return base;
   }
 
@@ -1054,13 +1082,11 @@
       state.trafficExpenseSubmittedByIvId = {};
     }
     if (payload.trafficExpenseSubmittedByIvProjectKey && typeof payload.trafficExpenseSubmittedByIvProjectKey === 'object') {
-      if (!state.trafficExpenseSubmittedByIvProjectKey || typeof state.trafficExpenseSubmittedByIvProjectKey !== 'object')
-        state.trafficExpenseSubmittedByIvProjectKey = {};
-      for (const ivId of Object.keys(payload.trafficExpenseSubmittedByIvProjectKey)) {
-        const cur = state.trafficExpenseSubmittedByIvProjectKey[ivId];
-        const inc = payload.trafficExpenseSubmittedByIvProjectKey[ivId];
-        state.trafficExpenseSubmittedByIvProjectKey[ivId] = mergeTrafficExpenseMaps(cur, inc, state.trafficExpenseResetAt);
-      }
+      state.trafficExpenseSubmittedByIvProjectKey = mergeTrafficExpenseProjectMaps(
+        state.trafficExpenseSubmittedByIvProjectKey || {},
+        payload.trafficExpenseSubmittedByIvProjectKey,
+        state.trafficExpenseResetAt
+      );
     } else if (!state.trafficExpenseSubmittedByIvProjectKey) {
       state.trafficExpenseSubmittedByIvProjectKey = {};
     }
@@ -2554,16 +2580,14 @@
       }
 
       if (incProj && typeof incProj === 'object') {
-        if (!state.trafficExpenseSubmittedByIvProjectKey || typeof state.trafficExpenseSubmittedByIvProjectKey !== 'object')
-          state.trafficExpenseSubmittedByIvProjectKey = {};
-        for (const ivId of Object.keys(incProj)) {
-          const cur = state.trafficExpenseSubmittedByIvProjectKey[ivId];
-          const inc = incProj[ivId];
-          const merged = mergeTrafficExpenseMaps(cur, inc, state.trafficExpenseResetAt);
-          if (JSON.stringify(cur || {}) !== JSON.stringify(merged)) {
-            state.trafficExpenseSubmittedByIvProjectKey[ivId] = merged;
-            changed = true;
-          }
+        const mergedProj = mergeTrafficExpenseProjectMaps(
+          state.trafficExpenseSubmittedByIvProjectKey || {},
+          incProj,
+          state.trafficExpenseResetAt
+        );
+        if (JSON.stringify(state.trafficExpenseSubmittedByIvProjectKey || {}) !== JSON.stringify(mergedProj)) {
+          state.trafficExpenseSubmittedByIvProjectKey = mergedProj;
+          changed = true;
         }
       }
 
