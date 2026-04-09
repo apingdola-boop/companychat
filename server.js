@@ -113,6 +113,74 @@ function mergeTrafficExpenseProjectMaps(base, incoming, resetAt) {
   return out;
 }
 
+function trafficYmFromAtMsServer(atMs) {
+  const t = Number(atMs) || Date.now();
+  const d = new Date(t);
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+}
+
+function trafficCompositeProjectKeyServer(ym, pk) {
+  return String(ym || '').trim() + '|' + String(pk || '').trim();
+}
+
+function normalizeTrafficFlatInnerForIvServer(inner) {
+  if (!inner || typeof inner !== 'object') return {};
+  const keys = Object.keys(inner);
+  if (keys.some((k) => /^\d{4}-\d{2}$/.test(k))) {
+    const out = {};
+    for (const k of keys) {
+      if (/^\d{4}-\d{2}$/.test(k) && inner[k] && typeof inner[k] === 'object') out[k] = inner[k];
+    }
+    return out;
+  }
+  if (typeof inner.at === 'number' && Number.isFinite(inner.at)) {
+    const ym = trafficYmFromAtMsServer(inner.at);
+    return { [ym]: { ...inner } };
+  }
+  return {};
+}
+
+function normalizeTrafficProjectInnerForIvServer(inner) {
+  if (!inner || typeof inner !== 'object') return {};
+  const out = {};
+  for (const k of Object.keys(inner)) {
+    const rec = inner[k];
+    if (!rec || typeof rec !== 'object') continue;
+    if (k.indexOf('|') === -1) {
+      const ym = trafficYmFromAtMsServer(rec.at || Date.now());
+      out[trafficCompositeProjectKeyServer(ym, k)] = rec;
+    } else {
+      out[k] = rec;
+    }
+  }
+  return out;
+}
+
+function migrateTrafficMonthlyShapeOnRootServer(root, kind) {
+  if (!root || typeof root !== 'object') return;
+  for (const ivId of Object.keys(root)) {
+    const inner = root[ivId];
+    if (!inner || typeof inner !== 'object') continue;
+    root[ivId] =
+      kind === 'flat' ? normalizeTrafficFlatInnerForIvServer(inner) : normalizeTrafficProjectInnerForIvServer(inner);
+    if (Object.keys(root[ivId]).length === 0) delete root[ivId];
+  }
+}
+
+function mergeTrafficExpenseIvNestedMapServer(base, incoming, resetAt) {
+  const b = base && typeof base === 'object' ? base : {};
+  const inc = incoming && typeof incoming === 'object' ? incoming : {};
+  const keys = new Set([...Object.keys(b), ...Object.keys(inc)]);
+  const out = {};
+  for (const ivId of keys) {
+    const bIn = normalizeTrafficFlatInnerForIvServer(b[ivId] && typeof b[ivId] === 'object' ? b[ivId] : {});
+    const iIn = normalizeTrafficFlatInnerForIvServer(inc[ivId] && typeof inc[ivId] === 'object' ? inc[ivId] : {});
+    const merged = mergeTrafficExpenseMaps(bIn, iIn, resetAt);
+    if (Object.keys(merged).length > 0) out[ivId] = merged;
+  }
+  return out;
+}
+
 /** 디스크/DB에 리셋 시각만 맞고 맵이 남아 있던 과거 버그 복구 */
 function trafficExpenseRecordActiveForGate(rec, gate) {
   if (!rec || typeof rec !== 'object' || rec.cleared) return false;
@@ -143,7 +211,15 @@ function pruneTrafficMapsOnShared(shared) {
   const flat = shared.trafficExpenseSubmittedByIvId;
   if (flat && typeof flat === 'object') {
     for (const id of Object.keys(flat)) {
-      if (!trafficExpenseRecordActiveForGate(flat[id], gate)) delete flat[id];
+      const inner = flat[id];
+      if (!inner || typeof inner !== 'object') {
+        delete flat[id];
+        continue;
+      }
+      for (const ym of Object.keys(inner)) {
+        if (!trafficExpenseRecordActiveForGate(inner[ym], gate)) delete inner[ym];
+      }
+      if (Object.keys(inner).length === 0) delete flat[id];
     }
   }
   const proj = shared.trafficExpenseSubmittedByIvProjectKey;
@@ -166,7 +242,11 @@ function sanitizeTrafficMapsForResetGate(shared) {
       ? shared.trafficExpenseResetAt
       : 0;
   if (gate > 0) {
-    shared.trafficExpenseSubmittedByIvId = mergeTrafficExpenseMaps(shared.trafficExpenseSubmittedByIvId || {}, {}, gate);
+    shared.trafficExpenseSubmittedByIvId = mergeTrafficExpenseIvNestedMapServer(
+      shared.trafficExpenseSubmittedByIvId || {},
+      {},
+      gate
+    );
     shared.trafficExpenseSubmittedByIvProjectKey = mergeTrafficExpenseProjectMaps(
       shared.trafficExpenseSubmittedByIvProjectKey || {},
       {},
@@ -348,12 +428,18 @@ function mergeSharedUpdate(payload) {
   } else if (incVer > curVer) {
     trafficFlat = cloneJsonObject(payload.trafficExpenseSubmittedByIvId);
     trafficProj = cloneJsonObject(payload.trafficExpenseSubmittedByIvProjectKey);
+    migrateTrafficMonthlyShapeOnRootServer(trafficFlat, 'flat');
+    migrateTrafficMonthlyShapeOnRootServer(trafficProj, 'project');
     nextTrafficVer = incVer;
   } else {
     nextTrafficVer = curVer;
     trafficFlat =
       payload.trafficExpenseSubmittedByIvId && typeof payload.trafficExpenseSubmittedByIvId === 'object'
-        ? mergeTrafficExpenseMaps(shared.trafficExpenseSubmittedByIvId, payload.trafficExpenseSubmittedByIvId, nextResetAt)
+        ? mergeTrafficExpenseIvNestedMapServer(
+            shared.trafficExpenseSubmittedByIvId,
+            payload.trafficExpenseSubmittedByIvId,
+            nextResetAt
+          )
         : shared.trafficExpenseSubmittedByIvId;
     trafficProj =
       payload.trafficExpenseSubmittedByIvProjectKey && typeof payload.trafficExpenseSubmittedByIvProjectKey === 'object'
@@ -455,6 +541,8 @@ function initFromFile() {
   ensureAccountsNonEmpty();
   ensureProjectsSeededIfEmpty();
   migrateTrafficExpenseSchemaIfNeeded(shared);
+  migrateTrafficMonthlyShapeOnRootServer(shared.trafficExpenseSubmittedByIvId, 'flat');
+  migrateTrafficMonthlyShapeOnRootServer(shared.trafficExpenseSubmittedByIvProjectKey, 'project');
   sanitizeTrafficMapsForResetGate(shared);
   saveSharedToDisk(shared);
 }
@@ -474,6 +562,8 @@ async function initFromSupabase() {
       if (!migrated.accounts.length) migrated.accounts = seedDemoAccounts();
       shared = migrated;
       migrateTrafficExpenseSchemaIfNeeded(shared);
+      migrateTrafficMonthlyShapeOnRootServer(shared.trafficExpenseSubmittedByIvId, 'flat');
+      migrateTrafficMonthlyShapeOnRootServer(shared.trafficExpenseSubmittedByIvProjectKey, 'project');
       await saveSharedToSupabase();
       console.log('[H-채팅] 로컬 shared-state.json 을 Supabase 로 복사했습니다.');
       row = await loadSharedFromSupabase();
@@ -498,6 +588,8 @@ async function initFromSupabase() {
   ensureAccountsNonEmpty();
   ensureProjectsSeededIfEmpty();
   migrateTrafficExpenseSchemaIfNeeded(shared);
+  migrateTrafficMonthlyShapeOnRootServer(shared.trafficExpenseSubmittedByIvId, 'flat');
+  migrateTrafficMonthlyShapeOnRootServer(shared.trafficExpenseSubmittedByIvProjectKey, 'project');
   sanitizeTrafficMapsForResetGate(shared);
 }
 

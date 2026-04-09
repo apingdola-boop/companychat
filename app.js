@@ -335,6 +335,133 @@
     return out;
   }
 
+  function trafficYmFromAtMs(atMs) {
+    const t = Number(atMs) || Date.now();
+    const d = new Date(t);
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+  }
+
+  function trafficCompositeProjectKey(ym, pk) {
+    return String(ym || '').trim() + '|' + String(pk || '').trim();
+  }
+
+  function trafficProjectKeySuffix(compositeOrLegacy) {
+    const s = String(compositeOrLegacy || '');
+    const i = s.indexOf('|');
+    if (i === -1) return s;
+    return s.slice(i + 1);
+  }
+
+  function trafficYmPrefix(compositeOrLegacy) {
+    const m = String(compositeOrLegacy || '').match(/^(\d{4}-\d{2})\|/);
+    return m ? m[1] : '';
+  }
+
+  function normalizeTrafficFlatInnerForIv(inner) {
+    if (!inner || typeof inner !== 'object') return {};
+    const keys = Object.keys(inner);
+    if (keys.some((k) => /^\d{4}-\d{2}$/.test(k))) {
+      const out = {};
+      for (const k of keys) {
+        if (/^\d{4}-\d{2}$/.test(k) && inner[k] && typeof inner[k] === 'object') out[k] = inner[k];
+      }
+      return out;
+    }
+    if (typeof inner.at === 'number' && Number.isFinite(inner.at)) {
+      const ym = trafficYmFromAtMs(inner.at);
+      return { [ym]: { ...inner } };
+    }
+    return {};
+  }
+
+  function normalizeTrafficProjectInnerForIv(inner) {
+    if (!inner || typeof inner !== 'object') return {};
+    const out = {};
+    for (const k of Object.keys(inner)) {
+      const rec = inner[k];
+      if (!rec || typeof rec !== 'object') continue;
+      if (k.indexOf('|') === -1) {
+        const ym = trafficYmFromAtMs(rec.at || Date.now());
+        out[trafficCompositeProjectKey(ym, k)] = rec;
+      } else {
+        out[k] = rec;
+      }
+    }
+    return out;
+  }
+
+  function migrateTrafficMonthlyShapeOnRoot(root, kind) {
+    if (!root || typeof root !== 'object') return;
+    for (const ivId of Object.keys(root)) {
+      const inner = root[ivId];
+      if (!inner || typeof inner !== 'object') continue;
+      root[ivId] = kind === 'flat' ? normalizeTrafficFlatInnerForIv(inner) : normalizeTrafficProjectInnerForIv(inner);
+      if (Object.keys(root[ivId]).length === 0) delete root[ivId];
+    }
+  }
+
+  /** 면접원 id → (월 → 제출) 구조 병합 */
+  function mergeTrafficExpenseIvNestedMap(base, incoming, resetAt) {
+    const b = base && typeof base === 'object' ? base : {};
+    const inc = incoming && typeof incoming === 'object' ? incoming : {};
+    const keys = new Set([...Object.keys(b), ...Object.keys(inc)]);
+    const out = {};
+    for (const ivId of keys) {
+      const bIn = normalizeTrafficFlatInnerForIv(b[ivId] && typeof b[ivId] === 'object' ? b[ivId] : {});
+      const iIn = normalizeTrafficFlatInnerForIv(inc[ivId] && typeof inc[ivId] === 'object' ? inc[ivId] : {});
+      const merged = mergeTrafficExpenseMaps(bIn, iIn, resetAt);
+      if (Object.keys(merged).length > 0) out[ivId] = merged;
+    }
+    return out;
+  }
+
+  function pickTrafficFlatRecord(inner, ymFilter) {
+    if (!inner || typeof inner !== 'object') return null;
+    const innerNorm = normalizeTrafficFlatInnerForIv(inner);
+    const yf = String(ymFilter || '').trim();
+    if (/^\d{4}-\d{2}$/.test(yf)) {
+      const r = innerNorm[yf];
+      return r && typeof r === 'object' ? r : null;
+    }
+    let best = null;
+    let bestAt = -1;
+    for (const k of Object.keys(innerNorm)) {
+      const r = innerNorm[k];
+      if (!r || typeof r !== 'object') continue;
+      const at = Number(r.at) || 0;
+      if (at > bestAt) {
+        bestAt = at;
+        best = r;
+      }
+    }
+    return best;
+  }
+
+  function collectTrafficYmsForSheet() {
+    const ymSet = new Set();
+    const flat = state.trafficExpenseSubmittedByIvId || {};
+    for (const ivId of Object.keys(flat)) {
+      const inner = flat[ivId];
+      if (!inner || typeof inner !== 'object') continue;
+      for (const k of Object.keys(inner)) {
+        if (/^\d{4}-\d{2}$/.test(k) && isTrafficExpenseSubmissionActive(inner[k])) ymSet.add(k);
+      }
+    }
+    const proj = state.trafficExpenseSubmittedByIvProjectKey || {};
+    for (const ivId of Object.keys(proj)) {
+      const inner = proj[ivId];
+      if (!inner || typeof inner !== 'object') continue;
+      for (const ck of Object.keys(inner)) {
+        const r = inner[ck];
+        if (!isTrafficExpenseSubmissionActive(r)) continue;
+        const yp = trafficYmPrefix(ck);
+        if (yp) ymSet.add(yp);
+        else if (r && r.at) ymSet.add(trafficYmFromAtMs(r.at));
+      }
+    }
+    return ymSet;
+  }
+
   /**
    * 교통비 제출 1건이 현재 유효한지. cleared·타임스탬프 없음·전역 초기화(trafficExpenseResetAt) 이전이면 무효.
    * loadState 시에는 gate 인자에 반드시 해당 객체의 trafficExpenseResetAt를 넘긴다(state 미할당).
@@ -355,7 +482,15 @@
   function pruneTrafficExpenseMapsObject(flat, projectByIv, gate) {
     if (flat && typeof flat === 'object') {
       for (const id of Object.keys(flat)) {
-        if (!isTrafficExpenseSubmissionActive(flat[id], gate)) delete flat[id];
+        const inner = flat[id];
+        if (!inner || typeof inner !== 'object') {
+          delete flat[id];
+          continue;
+        }
+        for (const ym of Object.keys(inner)) {
+          if (!isTrafficExpenseSubmissionActive(inner[ym], gate)) delete inner[ym];
+        }
+        if (Object.keys(inner).length === 0) delete flat[id];
       }
     }
     if (projectByIv && typeof projectByIv === 'object') {
@@ -818,9 +953,11 @@
       base.trafficExpenseDataVersion = TRAFFIC_SCHEMA_VERSION;
       base._trafficSchemaMigrated = true;
     }
+    migrateTrafficMonthlyShapeOnRoot(base.trafficExpenseSubmittedByIvId, 'flat');
+    migrateTrafficMonthlyShapeOnRoot(base.trafficExpenseSubmittedByIvProjectKey, 'project');
     const tGate = base.trafficExpenseResetAt;
     if (tGate > 0) {
-      base.trafficExpenseSubmittedByIvId = mergeTrafficExpenseMaps(base.trafficExpenseSubmittedByIvId || {}, {}, tGate);
+      base.trafficExpenseSubmittedByIvId = mergeTrafficExpenseIvNestedMap(base.trafficExpenseSubmittedByIvId || {}, {}, tGate);
       base.trafficExpenseSubmittedByIvProjectKey = mergeTrafficExpenseProjectMaps(
         base.trafficExpenseSubmittedByIvProjectKey || {},
         {},
@@ -1155,6 +1292,8 @@
       state.trafficExpenseDataVersion = pVerTraffic;
       state.trafficExpenseSubmittedByIvId = clFlat;
       state.trafficExpenseSubmittedByIvProjectKey = clProj;
+      migrateTrafficMonthlyShapeOnRoot(state.trafficExpenseSubmittedByIvId, 'flat');
+      migrateTrafficMonthlyShapeOnRoot(state.trafficExpenseSubmittedByIvProjectKey, 'project');
       state.trafficExpenseResetAt = Math.max(
         state.trafficExpenseResetAt,
         typeof payload.trafficExpenseResetAt === 'number' && Number.isFinite(payload.trafficExpenseResetAt)
@@ -1163,7 +1302,7 @@
       );
     } else {
       if (payload.trafficExpenseSubmittedByIvId && typeof payload.trafficExpenseSubmittedByIvId === 'object') {
-        state.trafficExpenseSubmittedByIvId = mergeTrafficExpenseMaps(
+        state.trafficExpenseSubmittedByIvId = mergeTrafficExpenseIvNestedMap(
           state.trafficExpenseSubmittedByIvId,
           payload.trafficExpenseSubmittedByIvId,
           state.trafficExpenseResetAt
@@ -2348,6 +2487,8 @@
       state.trafficExpenseDataVersion = TRAFFIC_SCHEMA_VERSION;
     if (!state.trafficExpenseSubmittedByIvId || typeof state.trafficExpenseSubmittedByIvId !== 'object')
       state.trafficExpenseSubmittedByIvId = {};
+    if (!state.trafficExpenseSubmittedByIvId[id] || typeof state.trafficExpenseSubmittedByIvId[id] !== 'object')
+      state.trafficExpenseSubmittedByIvId[id] = {};
     const record = {
       at: opts && typeof opts.at === 'number' && Number.isFinite(opts.at) ? opts.at : Date.now(),
       manual: !!(opts && opts.manual),
@@ -2362,7 +2503,8 @@
     if (opts && opts.summary) {
       record.summary = opts.summary;
     }
-    state.trafficExpenseSubmittedByIvId[id] = record;
+    const ym = trafficYmFromAtMs(record.at);
+    state.trafficExpenseSubmittedByIvId[id][ym] = record;
     return true;
   }
 
@@ -2400,30 +2542,40 @@
       state.trafficExpenseSubmittedByIvProjectKey = {};
     if (!state.trafficExpenseSubmittedByIvProjectKey[id] || typeof state.trafficExpenseSubmittedByIvProjectKey[id] !== 'object')
       state.trafficExpenseSubmittedByIvProjectKey[id] = {};
-    // 프로젝트 번호 단위로 1개만 남기기: 같은 pn이 다른 키에 있거나, 같은 엑셀 URL이 다른 키에 있으면 취소 처리
+    const atMs = opts && typeof opts.at === 'number' && Number.isFinite(opts.at) ? opts.at : Date.now();
+    const ym =
+      opts && opts.trafficYm && /^\d{4}-\d{2}$/.test(String(opts.trafficYm).trim())
+        ? String(opts.trafficYm).trim()
+        : trafficYmFromAtMs(atMs);
+    const rawPk = pk.indexOf('|') > 0 && /^\d{4}-\d{2}\|/.test(pk) ? trafficProjectKeySuffix(pk) : pk;
+    const composite = trafficCompositeProjectKey(ym, rawPk);
+    // 같은 달·같은 프로젝트 키 중복만 정리
     try {
       const byPk = state.trafficExpenseSubmittedByIvProjectKey[id];
       const excelUrl = opts && opts.files && opts.files.excel ? String(opts.files.excel) : '';
       const opn =
         (opts && opts.projectNumber && String(opts.projectNumber).trim()) ||
-        (pk.indexOf('pn:') === 0 ? pk.slice(3) : '');
-      for (const otherPk of Object.keys(byPk)) {
-        if (otherPk === pk) continue;
-        const r = byPk[otherPk];
+        (rawPk.indexOf('pn:') === 0 ? rawPk.slice(3) : '');
+      for (const otherKey of Object.keys(byPk)) {
+        if (otherKey === composite) continue;
+        const r = byPk[otherKey];
         if (!r || typeof r !== 'object') continue;
         if (r.cleared) continue;
+        const otherYm = trafficYmPrefix(otherKey) || trafficYmFromAtMs(r.at || 0);
+        if (otherYm !== ym) continue;
+        const otherSuf = trafficProjectKeySuffix(otherKey);
         let dup = false;
         if (opn) {
           const rpn = String(r.projectNumber || '').trim();
           if (rpn && rpn === opn) dup = true;
-          if (!rpn && otherPk === 'pn:' + opn) dup = true;
+          if (!rpn && otherSuf === 'pn:' + opn) dup = true;
         }
         if (!dup && excelUrl) {
           const ex2 = r.files && r.files.excel ? String(r.files.excel) : '';
           if (ex2 && ex2 === excelUrl) dup = true;
         }
         if (dup) {
-          byPk[otherPk] = {
+          byPk[otherKey] = {
             at: Date.now(),
             cleared: true,
             manual: false,
@@ -2433,16 +2585,16 @@
       }
     } catch (_) {}
     const record = {
-      at: opts && typeof opts.at === 'number' && Number.isFinite(opts.at) ? opts.at : Date.now(),
+      at: atMs,
       manual: !!(opts && opts.manual),
       source: (opts && opts.source) || 'manual',
     };
     if (opts && opts.cleared) record.cleared = true;
     if (opts && opts.files) record.files = opts.files;
     if (opts && opts.summary) record.summary = opts.summary;
-    if (pk.indexOf('pn:') === 0) record.projectNumber = pk.slice(3);
+    if (rawPk.indexOf('pn:') === 0) record.projectNumber = rawPk.slice(3);
     else if (opts && opts.projectNumber) record.projectNumber = String(opts.projectNumber).trim();
-    state.trafficExpenseSubmittedByIvProjectKey[id][pk] = record;
+    state.trafficExpenseSubmittedByIvProjectKey[id][composite] = record;
     return true;
   }
 
@@ -2456,7 +2608,13 @@
       state.trafficExpenseSubmittedByIvProjectKey = {};
     if (!state.trafficExpenseSubmittedByIvProjectKey[id] || typeof state.trafficExpenseSubmittedByIvProjectKey[id] !== 'object')
       state.trafficExpenseSubmittedByIvProjectKey[id] = {};
-    state.trafficExpenseSubmittedByIvProjectKey[id][pk] = {
+    const ym =
+      opts && opts.trafficYm && /^\d{4}-\d{2}$/.test(String(opts.trafficYm).trim())
+        ? String(opts.trafficYm).trim()
+        : trafficYmFromAtMs(Date.now());
+    const rawPk = pk.indexOf('|') > 0 && /^\d{4}-\d{2}\|/.test(pk) ? trafficProjectKeySuffix(pk) : pk;
+    const composite = trafficCompositeProjectKey(ym, rawPk);
+    state.trafficExpenseSubmittedByIvProjectKey[id][composite] = {
       at: Date.now(),
       cleared: true,
       manual: true,
@@ -2472,13 +2630,18 @@
     if (!acc) return false;
     if (!state.trafficExpenseSubmittedByIvId || typeof state.trafficExpenseSubmittedByIvId !== 'object')
       state.trafficExpenseSubmittedByIvId = {};
-    const record = {
+    if (!state.trafficExpenseSubmittedByIvId[id] || typeof state.trafficExpenseSubmittedByIvId[id] !== 'object')
+      state.trafficExpenseSubmittedByIvId[id] = {};
+    const ym =
+      opts && opts.trafficYm && /^\d{4}-\d{2}$/.test(String(opts.trafficYm).trim())
+        ? String(opts.trafficYm).trim()
+        : trafficYmFromAtMs(Date.now());
+    state.trafficExpenseSubmittedByIvId[id][ym] = {
       at: Date.now(),
       cleared: true,
       manual: true,
       source: (opts && opts.source) || 'manual-clear',
     };
-    state.trafficExpenseSubmittedByIvId[id] = record;
     return true;
   }
 
@@ -2573,40 +2736,55 @@
   }
 
   /**
-   * 프로젝트(단체방) 필터: 면접원 1명당 "선택한 방의 projectNumber"와 저장된 제출의 projectNumber(또는 pn: 키)가
-   * 정확히 맞을 때만 제출 완료로 표시. 전체 맵 스캔 폴백은 제거해 프로젝트 간 오표시를 막음.
+   * 프로젝트(단체방) 필터: 같은 프로젝트 키(pn/room)에 대해 월(ym)이 맞는 제출만 보거나, 전체 월이면 최신 제출.
    */
-  function pickTrafficRecordForProjectRoom(mp, room) {
+  function pickTrafficRecordForProjectRoom(mp, room, ymFilter) {
     if (!mp || typeof mp !== 'object' || !room || room.type !== 'group') return null;
+    const yf = String(ymFilter || '').trim();
+    const useYm = /^\d{4}-\d{2}$/.test(yf);
     const expectedPn = String(room.projectNumber || '').trim();
     const roomScopedKey = 'room:' + String(room.id);
+    const pnKey = expectedPn ? 'pn:' + expectedPn : '';
 
-    if (expectedPn) {
-      const pnKey = 'pn:' + expectedPn;
-      if (mp[pnKey] && typeof mp[pnKey] === 'object') {
-        const r = mp[pnKey];
-        const rpn = String(r.projectNumber || '').trim();
-        if (rpn && rpn !== expectedPn) return null;
-        return isTrafficExpenseSubmissionActive(r) ? r : null;
+    const candidates = [];
+    for (const k of Object.keys(mp)) {
+      const r = mp[k];
+      if (!r || typeof r !== 'object') continue;
+      let matches = false;
+      if (expectedPn) {
+        const suf = trafficProjectKeySuffix(k);
+        if (suf === pnKey || k === pnKey) matches = true;
+        if (k === room.id) {
+          const rpn = String(r.projectNumber || '').trim();
+          if (rpn === expectedPn) matches = true;
+        }
+      } else {
+        const suf = trafficProjectKeySuffix(k);
+        if (suf === roomScopedKey || k === roomScopedKey || k === room.id) matches = true;
       }
-      if (mp[room.id] && typeof mp[room.id] === 'object') {
-        const r = mp[room.id];
-        const rpn = String(r.projectNumber || '').trim();
-        if (rpn === expectedPn) return isTrafficExpenseSubmissionActive(r) ? r : null;
-        return null;
+      if (!matches) continue;
+      const yk = trafficYmPrefix(k);
+      if (useYm) {
+        if (yk === yf) candidates.push(r);
+        else if (!yk && k.indexOf('|') === -1) {
+          const ra = Number(r.at) || 0;
+          if (ra && trafficYmFromAtMs(ra) === yf) candidates.push(r);
+        }
+      } else {
+        candidates.push(r);
       }
-      return null;
     }
 
-    if (mp[roomScopedKey] && typeof mp[roomScopedKey] === 'object') {
-      const r = mp[roomScopedKey];
-      return isTrafficExpenseSubmissionActive(r) ? r : null;
+    let best = null;
+    let bestAt = -1;
+    for (const r of candidates) {
+      const at = Number(r.at) || 0;
+      if (at > bestAt) {
+        bestAt = at;
+        best = r;
+      }
     }
-    if (mp[room.id] && typeof mp[room.id] === 'object') {
-      const r = mp[room.id];
-      return isTrafficExpenseSubmissionActive(r) ? r : null;
-    }
-    return null;
+    return best && isTrafficExpenseSubmissionActive(best) ? best : null;
   }
 
   function trafficExpenseMonthLabelForRow(fil, recAt) {
@@ -2696,6 +2874,8 @@
           incFlat && typeof incFlat === 'object' ? JSON.parse(JSON.stringify(incFlat)) : {};
         state.trafficExpenseSubmittedByIvProjectKey =
           incProj && typeof incProj === 'object' ? JSON.parse(JSON.stringify(incProj)) : {};
+        migrateTrafficMonthlyShapeOnRoot(state.trafficExpenseSubmittedByIvId, 'flat');
+        migrateTrafficMonthlyShapeOnRoot(state.trafficExpenseSubmittedByIvProjectKey, 'project');
         pruneTrafficExpenseMapsObject(
           state.trafficExpenseSubmittedByIvId,
           state.trafficExpenseSubmittedByIvProjectKey,
@@ -2706,7 +2886,11 @@
       }
 
       if (incFlat && typeof incFlat === 'object') {
-        const merged = mergeTrafficExpenseMaps(state.trafficExpenseSubmittedByIvId, incFlat, state.trafficExpenseResetAt);
+        const merged = mergeTrafficExpenseIvNestedMap(
+          state.trafficExpenseSubmittedByIvId,
+          incFlat,
+          state.trafficExpenseResetAt
+        );
         if (JSON.stringify(state.trafficExpenseSubmittedByIvId || {}) !== JSON.stringify(merged)) {
           state.trafficExpenseSubmittedByIvId = merged;
           changed = true;
@@ -2915,16 +3099,7 @@
       }),
     ].join('');
 
-    const ymSet = new Set();
-    for (const iv of ivsAll) {
-      const rec = subsFlat[iv.id];
-      if (!isTrafficExpenseSubmissionActive(rec)) continue;
-      const at = rec && rec.at ? Number(rec.at) : 0;
-      if (!at) continue;
-      const d = new Date(at);
-      const ym = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
-      ymSet.add(ym);
-    }
+    const ymSet = collectTrafficYmsForSheet();
     const ymOrdered = [...ymSet].sort().reverse();
     const ymOpts = [
       '<option value="">' + escapeHtml('전체 월') + '</option>',
@@ -2942,11 +3117,12 @@
       activeProjectRoomId ? state.rooms.find((r) => r.id === activeProjectRoomId && r.type === 'group') : null;
 
     function oneRow(uv) {
+      const ymFil = fil.ym && /^\d{4}-\d{2}$/.test(fil.ym) ? fil.ym : '';
       let rec =
         activeProjectRoom && subsByProj[uv.id] && typeof subsByProj[uv.id] === 'object'
-          ? pickTrafficRecordForProjectRoom(subsByProj[uv.id], activeProjectRoom)
+          ? pickTrafficRecordForProjectRoom(subsByProj[uv.id], activeProjectRoom, ymFil)
           : !activeProjectRoomId
-            ? subsFlat[uv.id]
+            ? pickTrafficFlatRecord(subsFlat[uv.id], ymFil)
             : null;
       if (rec && !isTrafficExpenseSubmissionActive(rec)) rec = null;
       const at = rec && rec.at ? Number(rec.at) : 0;
@@ -3004,12 +3180,7 @@
         .join(' ')
         .toLowerCase();
 
-      const ym = submitted
-        ? (() => {
-            const d = new Date(at);
-            return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
-          })()
-        : '';
+      const ym = submitted ? trafficYmFromAtMs(at) : '';
 
       return `<tr class="traffic-iv-row" data-iv-id="${escapeHtml(uv.id)}" data-team-key="${escapeHtml(
         tk
@@ -3080,7 +3251,7 @@
               <select id="traffic-filter-room" class="traffic-filter-select">${roomOpts}</select></label>
           </div>
           <p id="traffic-filter-stats" class="traffic-filter-stats" aria-live="polite"></p>
-          <p class="traffic-sheet-hint">프로젝트를 바꾸면 표가 그 프로젝트 번호(단체방 설정)와 저장된 제출의 <code>projectNumber</code>가 동일한 경우에만 &quot;제출 완료&quot;로 다시 계산됩니다. 여러 방에 같은 프로젝트 번호가 들어 있으면 한 제출이 둘 다에 표시됩니다.</p>
+          <p class="traffic-sheet-hint">제출 내역은 <strong>제출 시각 기준 연·월</strong>로 나뉘어 저장됩니다. 같은 면접원·프로젝트라도 달이 다르면 각각 유지됩니다. 월 필터로 볼 때만 해당 달 제출이 &quot;완료&quot;로 잡힙니다. 프로젝트를 바꾸면 단체방의 프로젝트 번호와 저장값이 맞을 때만 완료로 표시됩니다.</p>
           <div class="traffic-expense-table-scroll">
             <table class="traffic-expense-grid">
               <thead>
@@ -3751,16 +3922,21 @@
         if (!pk) return;
         const trRoom = state.rooms.find((r) => r.id === view.trafficListFilter.roomId);
         const trPn = trRoom && trRoom.projectNumber ? String(trRoom.projectNumber).trim() : '';
+        const ymManual =
+          view.trafficListFilter.ym && /^\d{4}-\d{2}$/.test(view.trafficListFilter.ym)
+            ? view.trafficListFilter.ym
+            : trafficYmFromAtMs(Date.now());
           if (action === 'set') {
           markTrafficExpenseSubmittedForIvProjectKey(id, pk, {
             manual: true,
             source: 'manual',
             projectNumber: trPn,
+            trafficYm: ymManual,
           });
             saveState();
             showToast('제출 완료로 표시했습니다.');
           } else if (action === 'clear') {
-          markTrafficExpenseClearedForIvProjectKey(id, pk, { source: 'manual-clear' });
+          markTrafficExpenseClearedForIvProjectKey(id, pk, { source: 'manual-clear', trafficYm: ymManual });
             saveState();
             showToast('제출 표시를 지웠습니다.');
           }
