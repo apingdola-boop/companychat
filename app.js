@@ -2265,27 +2265,35 @@
       state.trafficExpenseSubmittedByIvProjectKey = {};
     if (!state.trafficExpenseSubmittedByIvProjectKey[id] || typeof state.trafficExpenseSubmittedByIvProjectKey[id] !== 'object')
       state.trafficExpenseSubmittedByIvProjectKey[id] = {};
-    // 같은 업로드(엑셀 URL)가 여러 프로젝트에 동시에 찍히는 과거/중복 신호를 자동 정리:
-    // 현재 프로젝트(pk)에만 남기고, 같은 excel URL을 가진 다른 프로젝트 기록은 '취소'로 덮어씀
+    // 프로젝트 번호 단위로 1개만 남기기: 같은 pn이 다른 키에 있거나, 같은 엑셀 URL이 다른 키에 있으면 취소 처리
     try {
+      const byPk = state.trafficExpenseSubmittedByIvProjectKey[id];
       const excelUrl = opts && opts.files && opts.files.excel ? String(opts.files.excel) : '';
-      if (excelUrl) {
-        const byPk = state.trafficExpenseSubmittedByIvProjectKey[id];
-        for (const otherPk of Object.keys(byPk)) {
-          if (otherPk === pk) continue;
-          const r = byPk[otherPk];
-          if (!r || typeof r !== 'object') continue;
-          if (r.cleared) continue;
+      const opn =
+        (opts && opts.projectNumber && String(opts.projectNumber).trim()) ||
+        (pk.indexOf('pn:') === 0 ? pk.slice(3) : '');
+      for (const otherPk of Object.keys(byPk)) {
+        if (otherPk === pk) continue;
+        const r = byPk[otherPk];
+        if (!r || typeof r !== 'object') continue;
+        if (r.cleared) continue;
+        let dup = false;
+        if (opn) {
+          const rpn = String(r.projectNumber || '').trim();
+          if (rpn && rpn === opn) dup = true;
+          if (!rpn && otherPk === 'pn:' + opn) dup = true;
+        }
+        if (!dup && excelUrl) {
           const ex2 = r.files && r.files.excel ? String(r.files.excel) : '';
-          if (!ex2) continue;
-          if (ex2 === excelUrl) {
-            byPk[otherPk] = {
-              at: Date.now(),
-              cleared: true,
-              manual: false,
-              source: 'auto-dedupe',
-            };
-          }
+          if (ex2 && ex2 === excelUrl) dup = true;
+        }
+        if (dup) {
+          byPk[otherPk] = {
+            at: Date.now(),
+            cleared: true,
+            manual: false,
+            source: 'auto-dedupe',
+          };
         }
       }
     } catch (_) {}
@@ -2297,6 +2305,8 @@
     if (opts && opts.cleared) record.cleared = true;
     if (opts && opts.files) record.files = opts.files;
     if (opts && opts.summary) record.summary = opts.summary;
+    if (pk.indexOf('pn:') === 0) record.projectNumber = pk.slice(3);
+    else if (opts && opts.projectNumber) record.projectNumber = String(opts.projectNumber).trim();
     state.trafficExpenseSubmittedByIvProjectKey[id][pk] = record;
     return true;
   }
@@ -2376,10 +2386,12 @@
       } catch (_) {}
       return;
     }
+    const payloadPn = data && data.projectNumber != null ? String(data.projectNumber).trim() : '';
     const opts = {
       source: data.source || 'route-calc',
       files: data.files || null,
       summary: data.summary || null,
+      projectNumber: payloadPn,
     };
     const projectKey = guessProjectKeyForTrafficPayload(data);
     const okProject = projectKey
@@ -2416,13 +2428,45 @@
     }
   }
 
-  function trafficExpenseProjectLabelForRow(activeProjectKey) {
-    if (!activeProjectKey) return '프로젝트';
-    const room = state.rooms.find((r) => r.id === activeProjectKey);
+  function trafficExpenseProjectLabelForRoomId(roomId) {
+    if (!roomId) return '프로젝트';
+    const room = state.rooms.find((r) => r.id === roomId);
     if (!room) return '프로젝트';
     const pn = String(room.projectNumber || '').trim();
     if (pn) return pn;
     return String(room.name || '프로젝트').trim() || '프로젝트';
+  }
+
+  /** 프로젝트(단체방) 필터가 켜져 있을 때만: 저장맵에서 "이 프로젝트 번호"에 해당하는 레코드만 고름 */
+  function pickTrafficRecordForProjectRoom(mp, room) {
+    if (!mp || typeof mp !== 'object' || !room || room.type !== 'group') return null;
+    const expectedPn = String(room.projectNumber || '').trim();
+    const primaryKey = expectedPn ? 'pn:' + expectedPn : 'room:' + String(room.id);
+    const tryRec = (r, keyUsed) => {
+      if (!r || typeof r !== 'object') return null;
+      if (!expectedPn) return r;
+      const rpn = String(r.projectNumber || '').trim();
+      if (rpn) return rpn === expectedPn ? r : null;
+      // projectNumber 없는 레거시: "아무 프로젝트나"에 걸리면 안 됨 → 키가 이 방과 정확히 대응될 때만
+      if (keyUsed === primaryKey || keyUsed === room.id) return r;
+      return null;
+    };
+    if (mp[primaryKey]) {
+      const got = tryRec(mp[primaryKey], primaryKey);
+      if (got) return got;
+    }
+    if (mp[room.id]) {
+      const got = tryRec(mp[room.id], room.id);
+      if (got) return got;
+    }
+    if (expectedPn) {
+      for (const k of Object.keys(mp)) {
+        const r = mp[k];
+        const got = tryRec(r, k);
+        if (got && String((got.projectNumber || '').trim()) === expectedPn) return got;
+      }
+    }
+    return null;
   }
 
   function trafficExpenseMonthLabelForRow(fil, recAt) {
@@ -2612,11 +2656,13 @@
         rememberTrafficBridgeRowId(row.id);
         continue;
       }
+      const bridgePn = p && p.projectNumber != null ? String(p.projectNumber).trim() : '';
       const opts = {
         source: (p.source || 'route-calc') + '+supabase',
         files: p.files || null,
         summary: p.summary || null,
         at: at || undefined,
+        projectNumber: bridgePn,
       };
       const projectKey = guessProjectKeyForTrafficPayload(p);
       if (projectKey) {
@@ -2719,20 +2765,16 @@
       me.role === 'supervisor' || (me.role === 'interviewer' && me.id === urow.id);
 
     const activeProjectRoomId = fil.roomId || '';
-    const activeProjectKey = activeProjectRoomId ? trafficSubmissionKeyFromRoomId(activeProjectRoomId) : '';
+    const activeProjectRoom =
+      activeProjectRoomId ? state.rooms.find((r) => r.id === activeProjectRoomId && r.type === 'group') : null;
 
     function oneRow(uv) {
-      const rec = activeProjectKey
-        ? (() => {
-            const mp = subsByProj[uv.id] && typeof subsByProj[uv.id] === 'object' ? subsByProj[uv.id] : null;
-            if (!mp) return null;
-            // 신규(프로젝트번호 기반) 키 우선
-            if (mp[activeProjectKey]) return mp[activeProjectKey];
-            // 과거(roomId 기반) 데이터 호환: roomId로 저장된 흔적이 있으면 보여주되, 신규 키가 생기면 사라짐
-            if (activeProjectRoomId && mp[activeProjectRoomId]) return mp[activeProjectRoomId];
-            return null;
-          })()
-        : subsFlat[uv.id];
+      const rec =
+        activeProjectRoom && subsByProj[uv.id] && typeof subsByProj[uv.id] === 'object'
+          ? pickTrafficRecordForProjectRoom(subsByProj[uv.id], activeProjectRoom)
+          : !activeProjectRoomId
+            ? subsFlat[uv.id]
+            : null;
       const at = rec && rec.at ? Number(rec.at) : 0;
       const submitted = at > 0 && !(rec && rec.cleared);
       const status = submitted
@@ -2741,7 +2783,7 @@
 
       let fileButtons = '';
       if (submitted && rec.files) {
-        const projLabel = trafficExpenseProjectLabelForRow(activeProjectKey);
+        const projLabel = trafficExpenseProjectLabelForRoomId(activeProjectRoomId);
         const monthLabel = trafficExpenseMonthLabelForRow(fil, rec.at);
         const ivName = String(uv.name || '면접원').trim();
         if (rec.files.excel) {
@@ -3527,8 +3569,14 @@
         }
         const pk = trafficSubmissionKeyFromRoomId(view.trafficListFilter.roomId);
         if (!pk) return;
+        const trRoom = state.rooms.find((r) => r.id === view.trafficListFilter.roomId);
+        const trPn = trRoom && trRoom.projectNumber ? String(trRoom.projectNumber).trim() : '';
           if (action === 'set') {
-          markTrafficExpenseSubmittedForIvProjectKey(id, pk, { manual: true, source: 'manual' });
+          markTrafficExpenseSubmittedForIvProjectKey(id, pk, {
+            manual: true,
+            source: 'manual',
+            projectNumber: trPn,
+          });
             saveState();
             showToast('제출 완료로 표시했습니다.');
           } else if (action === 'clear') {
