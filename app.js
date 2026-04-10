@@ -269,9 +269,14 @@
       data.ivId,
       data.accountId,
       data.interviewerId,
+      data.interviewerAccountId,
       data.memberId,
       data.staffId,
       data.employeeId,
+      data.employeeNo,
+      data.empNo,
+      data.sabun,
+      data.userId,
     ];
     for (const ic of idCandidates) {
       if (ic == null || ic === '') continue;
@@ -285,6 +290,19 @@
       if (byLogin) return byLogin;
       const byName = matchByDisplayName(lidRaw);
       if (byName) return byName;
+    }
+
+    // 일부 도구는 loginId 대신 별도 키로 사번을 보냄
+    const loginLike = [
+      data.interviewerLoginId,
+      data.interviewerStaffId,
+      data.interviewerEmployeeId,
+      data.employeeNumber,
+      data.staffNumber,
+    ];
+    for (const v of loginLike) {
+      const hit = matchByLoginIdString(v);
+      if (hit) return hit;
     }
 
     return null;
@@ -2503,6 +2521,10 @@
     if (opts && opts.summary) {
       record.summary = opts.summary;
     }
+    // 자동 검색/추가 메타 저장 (도구 업데이트로 필드가 생겨도 유지)
+    if (opts && opts.autoSearch != null) record.autoSearch = opts.autoSearch;
+    if (opts && opts.search != null) record.search = opts.search;
+    if (opts && opts.searchMeta != null) record.searchMeta = opts.searchMeta;
     const ym = trafficYmFromAtMs(record.at);
     state.trafficExpenseSubmittedByIvId[id][ym] = record;
     return true;
@@ -2511,7 +2533,10 @@
   function guessProjectKeyForTrafficPayload(p) {
     // 구조적으로 겹치는 단체방(roomId) 때문에 중복 기록이 나는 문제를 막기 위해
     // "프로젝트 번호 자체"를 제출 키로 사용한다. (ivId + projectNumber = 유일)
-    const pn = p && p.projectNumber != null ? String(p.projectNumber).trim() : '';
+    const pn =
+      p && (p.projectNumber != null || p.projectNo != null || p.projectNum != null)
+        ? String(p.projectNumber ?? p.projectNo ?? p.projectNum).trim()
+        : '';
     if (pn) return 'pn:' + pn;
     const pname = p && p.projectName != null ? String(p.projectName).trim() : '';
     if (pname) return 'name:' + pname;
@@ -2674,7 +2699,10 @@
       }
     }
     if (!data || typeof data !== 'object') return;
-    if (data.type !== 'companychat-traffic-submitted') return;
+    // 도구가 { payload: {...} } 형태로 감싸거나 type을 버전업할 수 있음
+    if (data.payload && typeof data.payload === 'object') data = data.payload;
+    const t = data && data.type != null ? String(data.type) : '';
+    if (!t || t.indexOf('companychat-traffic-submitted') !== 0) return;
     if (!state.me) return;
     const acc = findInterviewerForTrafficMessage(data);
     if (!acc) {
@@ -2684,11 +2712,17 @@
       } catch (_) {}
       return;
     }
-    const payloadPn = data && data.projectNumber != null ? String(data.projectNumber).trim() : '';
+    const payloadPn =
+      data && (data.projectNumber != null || data.projectNo != null || data.projectNum != null)
+        ? String(data.projectNumber ?? data.projectNo ?? data.projectNum).trim()
+        : '';
     const opts = {
       source: data.source || 'route-calc',
       files: data.files || null,
       summary: data.summary || null,
+      autoSearch: data.autoSearch ?? data.auto_search ?? null,
+      search: data.search ?? data.searchQuery ?? data.query ?? null,
+      searchMeta: data.searchMeta ?? data.search_meta ?? null,
       projectNumber: payloadPn,
     };
     const projectKey = guessProjectKeyForTrafficPayload(data);
@@ -2992,8 +3026,17 @@
     let changed = false;
     for (const row of rows) {
       if (done.has(row.id)) continue;
-      const p = row.payload;
-      if (!p || typeof p !== 'object' || p.type !== 'companychat-traffic-submitted') {
+      let p = row.payload;
+      if (p && typeof p === 'string') {
+        try {
+          p = JSON.parse(p);
+        } catch (_) {
+          p = null;
+        }
+      }
+      if (p && typeof p === 'object' && p.payload && typeof p.payload === 'object') p = p.payload;
+      const pt = p && p.type != null ? String(p.type) : '';
+      if (!p || typeof p !== 'object' || !pt || pt.indexOf('companychat-traffic-submitted') !== 0) {
         rememberTrafficBridgeRowId(row.id);
         continue;
       }
@@ -3012,13 +3055,19 @@
         rememberTrafficBridgeRowId(row.id);
         continue;
       }
-      const bridgePn = p && p.projectNumber != null ? String(p.projectNumber).trim() : '';
+      const bridgePn =
+        p && (p.projectNumber != null || p.projectNo != null || p.projectNum != null)
+          ? String(p.projectNumber ?? p.projectNo ?? p.projectNum).trim()
+          : '';
       const opts = {
         source: (p.source || 'route-calc') + '+supabase',
         files: p.files || null,
         summary: p.summary || null,
         at: at || undefined,
         projectNumber: bridgePn,
+        autoSearch: p.autoSearch ?? p.auto_search ?? null,
+        search: p.search ?? p.searchQuery ?? p.query ?? null,
+        searchMeta: p.searchMeta ?? p.search_meta ?? null,
       };
       const projectKey = guessProjectKeyForTrafficPayload(p);
       if (projectKey) {
@@ -3215,30 +3264,9 @@
     }
     const parentOriginEsc = escapeHtml(window.location.origin || '');
     const filterQEsc = escapeHtml(fil.q || '');
-    return `
-      <div class="traffic-tool-tab feedback-tab">
-        <h2 class="feedback-heading">교통비 · 거리 계산</h2>
-        <p class="caption">제출 반영: ① iframe·「새 탭에서 열기」로 연 유류비 창에서 전송 시 바로 <code>postMessage</code>. ② <strong>유류비 사이트만 단독으로 연 경우</strong>엔 Supabase <code>traffic_submission_signals</code> 큐로 쌓이며, 이 탭이 열려 있으면 약 16초마다 표에 동기화됩니다. (Supabase에 마이그레이션 <code>002_traffic_submission_signals.sql</code> 적용 필요.)</p>
-
-        <section class="traffic-tool-embed-block" aria-label="ROUTE CALC 도구">
-          <h3 class="traffic-block-title">ROUTE CALC · 거리·유류비</h3>
-          <div class="traffic-tool-bar">
-            <button type="button" class="btn btn-secondary traffic-tool-open-newtab" id="traffic-tool-open-newtab">새 탭에서 전체 화면으로 열기</button>
-            <a class="btn btn-ghost traffic-tool-open-href" href="${esc}" target="_blank" rel="noopener noreferrer">새 탭(링크만)</a>
-            ${
-              me && (me.role === 'researcher' || me.role === 'supervisor')
-                ? `<button type="button" class="btn btn-ghost" id="traffic-reset-all">교통비 제출 전체 삭제</button>`
-                : ''
-            }
-          </div>
-          <p class="caption traffic-tool-note">연동을 쓰려면 위 <strong>버튼</strong>으로 여세요(오른쪽 링크는 보안상 opener가 없을 수 있습니다). iframe이 비면 버튼으로 새 탭을 이용해 주세요.</p>
-          <div class="traffic-iframe-wrap">
-            <iframe class="traffic-iframe" title="거리 및 유류비 계산기" src="${esc}" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>
-          </div>
-          <p class="caption traffic-tool-credit">도구 페이지: <a href="${esc}" target="_blank" rel="noopener noreferrer">apingdola-boop.github.io/trafficservice.github.io</a></p>
-        </section>
-
-        <div class="traffic-expense-sheet-wrap">
+    const showSheet = me && me.role === 'supervisor';
+    const sheetHtml = showSheet
+      ? `<div class="traffic-expense-sheet-wrap">
           <h3 class="traffic-sheet-title">면접원 교통비 제출 현황</h3>
           <div class="traffic-table-toolbar">
             <label class="traffic-filter-field"><span class="traffic-filter-label">검색</span>
@@ -3267,8 +3295,11 @@
               <tbody>${rows}</tbody>
             </table>
           </div>
-        </div>
-        <details class="traffic-integration-details">
+        </div>`
+      : `<p class="hint" style="margin-top:1rem">면접원 계정에서는 <strong>제출 현황 표가 표시되지 않습니다</strong>. (교통비/유류비 계산기만 사용 가능)</p>`;
+
+    const detailsHtml = showSheet
+      ? `<details class="traffic-integration-details">
           <summary>ROUTE CALC에서 자동으로 「제출」 표시하기 (개발자용)</summary>
           <p class="caption">GitHub Pages <a href="${esc}" target="_blank" rel="noopener noreferrer">trafficservice</a> 에서 「자동 이메일 전송」 성공 직후 실행. <strong>loginId</strong>는 표의 면접원 ID(예: 33406)와 같으면 됩니다. 이름만 알면 <strong>name</strong> 필드(동명이인이 없을 때만 매칭). companychat 내부 id는 <strong>ivId</strong>.</p>
           <pre class="traffic-code-sample">(function () {
@@ -3285,7 +3316,34 @@
   if (w) w.postMessage(payload, targetOrigin);
 })();</pre>
           <p class="caption"><code>targetOrigin</code>은 companychat 주소와 동일해야 합니다. 표시가 안 되면 콘솔에서 <code>localStorage.setItem('company-chat-debug-traffic','1')</code> 후 새로고침 → 매칭 실패·출처 거부 로그 확인. 다른 도구 도메인은 <code>company-chat-traffic-tool-origins</code> 에 origin 추가.</p>
-        </details>
+        </details>`
+      : '';
+
+    return `
+      <div class="traffic-tool-tab feedback-tab">
+        <h2 class="feedback-heading">교통비 · 거리 계산</h2>
+        <p class="caption">제출 반영: ① iframe·「새 탭에서 열기」로 연 유류비 창에서 전송 시 바로 <code>postMessage</code>. ② <strong>유류비 사이트만 단독으로 연 경우</strong>엔 Supabase <code>traffic_submission_signals</code> 큐로 쌓이며, 이 탭이 열려 있으면 약 16초마다 표에 동기화됩니다. (Supabase에 마이그레이션 <code>002_traffic_submission_signals.sql</code> 적용 필요.)</p>
+
+        <section class="traffic-tool-embed-block" aria-label="ROUTE CALC 도구">
+          <h3 class="traffic-block-title">ROUTE CALC · 거리·유류비</h3>
+          <div class="traffic-tool-bar">
+            <button type="button" class="btn btn-secondary traffic-tool-open-newtab" id="traffic-tool-open-newtab">새 탭에서 전체 화면으로 열기</button>
+            <a class="btn btn-ghost traffic-tool-open-href" href="${esc}" target="_blank" rel="noopener noreferrer">새 탭(링크만)</a>
+            ${
+              me && (me.role === 'researcher' || me.role === 'supervisor')
+                ? `<button type="button" class="btn btn-ghost" id="traffic-reset-all">교통비 제출 전체 삭제</button>`
+                : ''
+            }
+          </div>
+          <p class="caption traffic-tool-note">연동을 쓰려면 위 <strong>버튼</strong>으로 여세요(오른쪽 링크는 보안상 opener가 없을 수 있습니다). iframe이 비면 버튼으로 새 탭을 이용해 주세요.</p>
+          <div class="traffic-iframe-wrap">
+            <iframe class="traffic-iframe" title="거리 및 유류비 계산기" src="${esc}" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>
+          </div>
+          <p class="caption traffic-tool-credit">도구 페이지: <a href="${esc}" target="_blank" rel="noopener noreferrer">apingdola-boop.github.io/trafficservice.github.io</a></p>
+        </section>
+
+        ${sheetHtml}
+        ${detailsHtml}
       </div>`;
   }
 
