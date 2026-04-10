@@ -1967,14 +1967,16 @@
       const sender = userById(latestMsg.senderId);
       const senderName = sender && sender.name ? sender.name : '알 수 없음';
       const roomName = room ? roomDisplayTitlePlain(room) : '채팅';
+      const isDm = !!(room && room.type === 'dm');
       const isVisibleRoom = document.visibilityState === 'visible' && view.screen === 'chat' && view.roomId === roomId;
       if (isVisibleRoom) continue;
       const extra = newIncoming.length > 1 ? ` 외 ${newIncoming.length - 1}건` : '';
+      const preview = `${chatMessagePreviewForNotify(latestMsg)}${extra}`;
       notifyChatForUser(
         meId,
         roomId,
-        roomName,
-        `${senderName}: ${chatMessagePreviewForNotify(latestMsg)}${extra}`,
+        isDm ? senderName : `${senderName} · ${roomName}`,
+        preview,
         `chat-msg-${meId}-${roomId}-${latestMsg.id || nowLatestMap[roomId]}`
       );
     }

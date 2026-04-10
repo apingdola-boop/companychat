@@ -805,10 +805,10 @@ function collectNewMessagesByRoom(prevMessages, nextMessages) {
   return out;
 }
 
-function roomTitleForPush(room) {
-  if (!room) return 'H-채팅';
-  if (room.type === 'group' && room.name) return String(room.name);
-  return 'H-채팅';
+function roomLabelForPush(room) {
+  if (!room) return '채팅';
+  if (room.type === 'group') return String(room.name || '단체 채팅');
+  return '개인 채팅';
 }
 
 async function sendWebPushToUser(userId, payloadObj) {
@@ -854,11 +854,14 @@ async function emitPushForNewMessages(prevShared) {
       ) {
         continue;
       }
+      const isDm = room && room.type === 'dm';
       await sendWebPushToUser(uid, {
         type: 'chat-message',
         roomId: row.roomId,
-        title: roomTitleForPush(room),
-        body: `${senderName}: ${preview}`,
+        title: isDm ? senderName : `${senderName} · ${roomLabelForPush(room)}`,
+        body: preview,
+        roomLabel: roomLabelForPush(room),
+        senderName,
         url: '/',
         tag: `chat-room-${row.roomId}`,
       });

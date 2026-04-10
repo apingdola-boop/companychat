@@ -30,9 +30,10 @@ self.addEventListener('push', (event) => {
   const title = data && data.title ? String(data.title) : 'H-채팅';
   const body = data && data.body ? String(data.body) : '새 메시지가 도착했습니다.';
   const url = data && data.url ? String(data.url) : '/';
+  const roomLabel = data && data.roomLabel ? String(data.roomLabel) : '';
   event.waitUntil(
     self.registration.showNotification(title, {
-      body,
+      body: roomLabel ? `${body}\n${roomLabel}` : body,
       tag: data && data.tag ? String(data.tag) : 'company-chat-push',
       data: { url },
     })
