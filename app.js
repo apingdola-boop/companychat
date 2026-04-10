@@ -197,6 +197,21 @@
     }
   }
 
+  /**
+   * 모바일 Safari 등에서 referrer/opener가 비거나 postMessage 대상 origin이 틀리는 경우가 많아,
+   * H-채팅 origin을 쿼리로 넘기면 유류비 페이지가 COMPANYCHAT_TARGET_ORIGIN 으로 씁니다.
+   */
+  function trafficToolUrlWithCcOrigin() {
+    const base = String(TRAFFIC_TOOL_URL || '').replace(/\/+$/, '') || TRAFFIC_TOOL_URL;
+    let o = '';
+    try {
+      o = window.location.origin || '';
+    } catch (_) {}
+    if (!o) return TRAFFIC_TOOL_URL;
+    const sep = base.indexOf('?') >= 0 ? '&' : '?';
+    return base + sep + 'ccOrigin=' + encodeURIComponent(o);
+  }
+
   /** 유류비 도구(iframe)에서 온 postMessage만 허용. 로컬에서 도구를 띄운 경우 localhost도 허용. */
   function trafficPostMessageOriginAllowed(origin) {
     if (!origin || typeof origin !== 'string') return false;
@@ -3101,7 +3116,7 @@
 
   /** 슈퍼바이저·면접원 — 외부 교통·유류비 계산기 (GitHub Pages) + 제출 현황 표 */
   function trafficToolTabHTML(me) {
-    const u = TRAFFIC_TOOL_URL;
+    const u = trafficToolUrlWithCcOrigin();
     const esc = escapeHtml(u);
     const subsFlat =
       state.trafficExpenseSubmittedByIvId && typeof state.trafficExpenseSubmittedByIvId === 'object'
@@ -3958,7 +3973,7 @@
 
     if (view.tab === 'traffic' && (state.me.role === 'supervisor' || state.me.role === 'interviewer')) {
       document.getElementById('traffic-tool-open-newtab')?.addEventListener('click', () => {
-        window.open(TRAFFIC_TOOL_URL, '_blank');
+        window.open(trafficToolUrlWithCcOrigin(), '_blank');
       });
       document.getElementById('traffic-reset-all')?.addEventListener('click', () => {
         if (!state.me || !(state.me.role === 'supervisor' || state.me.role === 'researcher')) return;
@@ -5746,6 +5761,11 @@
           : '📷 사진'
         : text.slice(0, 40);
       saveState();
+      try {
+        if (realtimeSocket && !realtimeSocket.connected) {
+          showToast('서버와 연결이 끊어져 있어 다른 기기·사람에게는 안 보일 수 있습니다. 잠시 후 다시 시도하거나 새로고침 해 보세요.');
+        }
+      } catch (_) {}
       pendingAttachment = null;
       ta.value = '';
       render();
