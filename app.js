@@ -2360,7 +2360,12 @@
   }
 
   function interviewerContactsHTML(me) {
-    const users = state.accounts.filter((u) => u.role === 'interviewer' && u.id !== me.id);
+    let users = state.accounts.filter((u) => u.role === 'interviewer' && u.id !== me.id);
+    /** 면접원 주소록: 동료 면접원은 같은 팀만 (슈퍼바이저는 위 roleBlocks에 별도 표시) */
+    if (me.role === 'interviewer') {
+      const myTeam = me.team != null ? String(me.team) : '';
+      users = users.filter((u) => (u.team != null ? String(u.team) : '') === myTeam);
+    }
     if (!users.length) return '';
     const byTeam = {};
     const unassigned = [];
