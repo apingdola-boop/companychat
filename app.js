@@ -1056,6 +1056,9 @@
   /** 채팅 IME 조합 중 #msg-list innerHTML 갱신이 일부 환경에서 조합을 끊을 수 있어 패치를 늦춤 */
   let chatImeComposing = false;
   let chatInboxPatchPending = false;
+  /** 브라우저 알림용: 방별 마지막 수신(ts) 스냅샷 */
+  let chatNotifySeenTsByRoom = Object.create(null);
+  let chatNotifySnapshotReady = false;
   function normalizeSocketBaseUrl(u) {
     let s = String(u || '').trim();
     if (!s) return '';
@@ -1409,7 +1412,19 @@
       }
       realtimeSocket.on('shared:state', (payload) => {
         const hadMe = !!state.me;
+        const prevMeId = state.me && state.me.id ? state.me.id : '';
         applySharedPayload(payload);
+        if (state.me && state.me.id) {
+          if (!chatNotifySnapshotReady || prevMeId !== state.me.id) {
+            chatNotifySeenTsByRoom = collectLatestIncomingByRoom(state.messages, state.rooms, state.me.id);
+            chatNotifySnapshotReady = true;
+          } else {
+            notifyIncomingChatsFromSharedState(chatNotifySeenTsByRoom);
+          }
+        } else {
+          chatNotifySeenTsByRoom = Object.create(null);
+          chatNotifySnapshotReady = false;
+        }
         realtimeSyncedFromServer = true;
         realtimeConnectError = '';
         syncSessionMeWithAccounts();
@@ -1744,14 +1759,78 @@
       .catch(() => {});
   }
 
+  function urlBase64ToUint8Array(base64String) {
+    const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+    const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+    const rawData = window.atob(base64);
+    const outputArray = new Uint8Array(rawData.length);
+    for (let i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
+    return outputArray;
+  }
+
+  async function fetchWebPushPublicKey() {
+    try {
+      const r = await fetch('/api/push/public-key', { credentials: 'same-origin' });
+      if (!r.ok) return '';
+      const j = await r.json();
+      return j && j.enabled && j.publicKey ? String(j.publicKey) : '';
+    } catch (_) {
+      return '';
+    }
+  }
+
+  async function syncWebPushSubscription() {
+    if (!state.me || !state.me.id) return;
+    if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) return;
+    if (Notification.permission !== 'granted') return;
+    const vapidPublicKey = await fetchWebPushPublicKey();
+    if (!vapidPublicKey) return;
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      let sub = await reg.pushManager.getSubscription();
+      if (!sub) {
+        sub = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(vapidPublicKey),
+        });
+      }
+      await fetch('/api/push/subscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ userId: state.me.id, subscription: sub.toJSON() }),
+      });
+    } catch (_) {}
+  }
+
+  async function unsubscribeWebPushForUser(userId) {
+    const uid = String(userId || '').trim();
+    if (!uid) return;
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.getSubscription();
+      if (!sub) return;
+      const endpoint = sub.endpoint;
+      await fetch('/api/push/unsubscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ userId: uid, endpoint }),
+      });
+      await sub.unsubscribe();
+    } catch (_) {}
+  }
+
   function requestNotifyPermission() {
     if (!('Notification' in window)) {
       alert('이 브라우저는 알림을 지원하지 않습니다.');
       return;
     }
-    Notification.requestPermission().then((p) => {
+    Notification.requestPermission().then(async (p) => {
       if (p === 'granted') {
-        showToast('이 기기 브라우저 알림이 켜졌습니다. 다른 사람 폰으로 자동 발송은 서버·알림톡 API가 필요합니다.');
+        await syncWebPushSubscription();
+        showToast('이 기기 푸시·브라우저 알림이 켜졌습니다.');
       }
     });
   }
@@ -1834,6 +1913,72 @@
     if (isChatNotifyMutedForUser(recipientUserId)) return;
     if (roomId && isChatNotifyMutedForRoom(recipientUserId, roomId)) return;
     notify(title, body, tag || 'chat-' + recipientUserId + '-' + String(roomId || 'x'));
+  }
+
+  function chatMessagePreviewForNotify(msg) {
+    if (!msg || typeof msg !== 'object') return '';
+    if (msg.video) return '동영상을 보냈습니다.';
+    if (msg.image) {
+      const txt = String(msg.text || '').trim();
+      return txt && txt !== '(사진)' ? `사진: ${txt}` : '사진을 보냈습니다.';
+    }
+    const txt = String(msg.text || '').trim();
+    return txt || '(내용 없음)';
+  }
+
+  function collectLatestIncomingByRoom(messagesByRoom, rooms, meId) {
+    const out = Object.create(null);
+    if (!meId || !messagesByRoom || typeof messagesByRoom !== 'object') return out;
+    const roomById = new Map((Array.isArray(rooms) ? rooms : []).map((r) => [r.id, r]));
+    for (const roomId of Object.keys(messagesByRoom)) {
+      const room = roomById.get(roomId);
+      if (!room || !Array.isArray(room.memberIds) || !room.memberIds.includes(meId)) continue;
+      const arr = Array.isArray(messagesByRoom[roomId]) ? messagesByRoom[roomId] : [];
+      let latest = 0;
+      for (const m of arr) {
+        if (!m || m.senderId === meId) continue;
+        const ts = Number(m.ts) || 0;
+        if (ts > latest) latest = ts;
+      }
+      if (latest > 0) out[roomId] = latest;
+    }
+    return out;
+  }
+
+  function notifyIncomingChatsFromSharedState(prevLatestMap) {
+    if (!state.me || !state.me.id) return;
+    const meId = state.me.id;
+    const roomById = new Map((state.rooms || []).map((r) => [r.id, r]));
+    const nowLatestMap = collectLatestIncomingByRoom(state.messages, state.rooms, meId);
+    for (const roomId of Object.keys(nowLatestMap)) {
+      const prevTs = Number(prevLatestMap && prevLatestMap[roomId]) || 0;
+      if (nowLatestMap[roomId] <= prevTs) continue;
+      const arr = Array.isArray(state.messages[roomId]) ? state.messages[roomId] : [];
+      if (!arr.length) continue;
+      const newIncoming = [];
+      for (const m of arr) {
+        if (!m || m.senderId === meId) continue;
+        const ts = Number(m.ts) || 0;
+        if (ts > prevTs) newIncoming.push(m);
+      }
+      if (!newIncoming.length) continue;
+      const room = roomById.get(roomId);
+      const latestMsg = newIncoming[newIncoming.length - 1];
+      const sender = userById(latestMsg.senderId);
+      const senderName = sender && sender.name ? sender.name : '알 수 없음';
+      const roomName = room ? roomDisplayTitlePlain(room) : '채팅';
+      const isVisibleRoom = document.visibilityState === 'visible' && view.screen === 'chat' && view.roomId === roomId;
+      if (isVisibleRoom) continue;
+      const extra = newIncoming.length > 1 ? ` 외 ${newIncoming.length - 1}건` : '';
+      notifyChatForUser(
+        meId,
+        roomId,
+        roomName,
+        `${senderName}: ${chatMessagePreviewForNotify(latestMsg)}${extra}`,
+        `chat-msg-${meId}-${roomId}-${latestMsg.id || nowLatestMap[roomId]}`
+      );
+    }
+    chatNotifySeenTsByRoom = nowLatestMap;
   }
 
   function toggleChatRoomNotifyMute(roomId) {
@@ -2105,6 +2250,7 @@
         team: acc.team || null,
       };
       saveState();
+      await syncWebPushSubscription();
       view.screen = 'main';
       render();
     });
@@ -3633,9 +3779,11 @@
     ensureTrafficBridgePolling();
 
     document.getElementById('btn-logout').addEventListener('click', () => {
+      const prevUserId = state.me && state.me.id ? state.me.id : '';
       state.me = null;
       view.screen = 'login';
       saveState();
+      unsubscribeWebPushForUser(prevUserId);
       render();
     });
 
@@ -3673,6 +3821,7 @@
           state.chatNotifyMutedByUser = {};
         state.chatNotifyMutedByUser[state.me.id] = !!prefMuted.checked;
         saveState();
+        if (!prefMuted.checked) requestNotifyPermission();
         showToast(
           prefMuted.checked ? '전체 푸시·알림을 껐습니다. 채팅은 언제든 열어서 볼 수 있어요.' : '전체 푸시·알림을 켰습니다.'
         );
@@ -5811,10 +5960,11 @@
   async function init() {
     el.root = document.getElementById('app');
     applyTheme(getTheme());
+    registerSw();
     await initRealtimeConnection();
     await refreshLanAccessHint();
     await migrateAndSeed();
-    registerSw();
+    await syncWebPushSubscription();
     render();
 
     /** 지원용: 개발자도구 콘솔에서 `__companyChatHealth()` 실행 후 결과를 복사해 보내 주세요. */

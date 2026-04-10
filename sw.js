@@ -19,3 +19,43 @@ self.addEventListener('activate', (e) => {
     })()
   );
 });
+
+self.addEventListener('push', (event) => {
+  let data = {};
+  try {
+    data = event.data ? event.data.json() : {};
+  } catch (_) {
+    data = {};
+  }
+  const title = data && data.title ? String(data.title) : 'H-채팅';
+  const body = data && data.body ? String(data.body) : '새 메시지가 도착했습니다.';
+  const url = data && data.url ? String(data.url) : '/';
+  event.waitUntil(
+    self.registration.showNotification(title, {
+      body,
+      tag: data && data.tag ? String(data.tag) : 'company-chat-push',
+      data: { url },
+    })
+  );
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const targetUrl =
+    event.notification && event.notification.data && event.notification.data.url
+      ? String(event.notification.data.url)
+      : '/';
+  event.waitUntil(
+    (async () => {
+      const allClients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      for (const client of allClients) {
+        if ('focus' in client) {
+          await client.focus();
+          if ('navigate' in client) await client.navigate(targetUrl);
+          return;
+        }
+      }
+      if (self.clients.openWindow) await self.clients.openWindow(targetUrl);
+    })()
+  );
+});

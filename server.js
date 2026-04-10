@@ -21,6 +21,7 @@ const crypto = require('crypto');
 const { networkInterfaces } = require('os');
 const { Server } = require('socket.io');
 const { createClient } = require('@supabase/supabase-js');
+const webpush = require('web-push');
 
 const ROOT = path.resolve(__dirname);
 const PORT = Number(process.env.PORT) || 8787;
@@ -33,6 +34,10 @@ const PUBLIC_URL_FILE = path.join(DATA_DIR, 'public-base-url.txt');
 
 const APP_STATE_TABLE = 'company_chat_app_state';
 const APP_STATE_ID = 'main';
+const VAPID_PUBLIC_KEY = String(process.env.VAPID_PUBLIC_KEY || '').trim();
+const VAPID_PRIVATE_KEY = String(process.env.VAPID_PRIVATE_KEY || '').trim();
+const VAPID_SUBJECT = String(process.env.VAPID_SUBJECT || 'mailto:admin@example.com').trim();
+let webPushEnabled = false;
 /** 올리면 서버·클라이언트가 예전 교통비 제출을 폐기하고, 구버전 동기화로 복구되지 않음 */
 const TRAFFIC_SCHEMA_VERSION = 2;
 
@@ -59,6 +64,8 @@ function emptyShared() {
     chatNotifyMutedByUser: {},
     chatNotifyMutedRoomsByUser: {},
     staffPresenceByUser: {},
+    /** userId -> PushSubscriptionJSON[] */
+    pushSubscriptionsByUser: {},
     /** 면접원 account id → { at, source?, manual? } 교통비 제출 표시 */
     trafficExpenseSubmittedByIvId: {},
     /** 면접원 account id → (프로젝트 key → { at, source?, manual?, cleared?, files?, summary? }) */
@@ -68,6 +75,52 @@ function emptyShared() {
     /** 교통비 저장 스키마(버전 낮은 클라이언트의 교통비 필드는 merge에서 무시) */
     trafficExpenseDataVersion: TRAFFIC_SCHEMA_VERSION,
   };
+}
+
+function webPushReady() {
+  return webPushEnabled;
+}
+
+function normalizePushSubscription(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const endpoint = raw.endpoint ? String(raw.endpoint).trim() : '';
+  const keys = raw.keys && typeof raw.keys === 'object' ? raw.keys : {};
+  const p256dh = keys.p256dh ? String(keys.p256dh).trim() : '';
+  const auth = keys.auth ? String(keys.auth).trim() : '';
+  if (!endpoint || !p256dh || !auth) return null;
+  return { endpoint, keys: { p256dh, auth } };
+}
+
+function ensurePushSubscriptionsRoot() {
+  if (!shared.pushSubscriptionsByUser || typeof shared.pushSubscriptionsByUser !== 'object') {
+    shared.pushSubscriptionsByUser = {};
+  }
+}
+
+function upsertPushSubscription(userId, subscription) {
+  const uid = String(userId || '').trim();
+  if (!uid) return false;
+  const sub = normalizePushSubscription(subscription);
+  if (!sub) return false;
+  ensurePushSubscriptionsRoot();
+  const arr = Array.isArray(shared.pushSubscriptionsByUser[uid]) ? shared.pushSubscriptionsByUser[uid] : [];
+  const i = arr.findIndex((x) => x && x.endpoint === sub.endpoint);
+  if (i >= 0) arr[i] = sub;
+  else arr.push(sub);
+  shared.pushSubscriptionsByUser[uid] = arr.slice(-10);
+  return true;
+}
+
+function removePushSubscription(userId, endpoint) {
+  const uid = String(userId || '').trim();
+  const ep = String(endpoint || '').trim();
+  if (!uid || !ep) return false;
+  ensurePushSubscriptionsRoot();
+  const arr = Array.isArray(shared.pushSubscriptionsByUser[uid]) ? shared.pushSubscriptionsByUser[uid] : [];
+  const next = arr.filter((x) => !(x && x.endpoint === ep));
+  if (next.length) shared.pushSubscriptionsByUser[uid] = next;
+  else delete shared.pushSubscriptionsByUser[uid];
+  return next.length !== arr.length;
 }
 
 function mergeTrafficExpenseMaps(base, incoming, resetAt) {
@@ -475,6 +528,10 @@ function mergeSharedUpdate(payload) {
       payload.staffPresenceByUser && typeof payload.staffPresenceByUser === 'object'
         ? payload.staffPresenceByUser
         : shared.staffPresenceByUser,
+    pushSubscriptionsByUser:
+      payload.pushSubscriptionsByUser && typeof payload.pushSubscriptionsByUser === 'object'
+        ? payload.pushSubscriptionsByUser
+        : shared.pushSubscriptionsByUser,
     trafficExpenseResetAt: nextResetAt,
     trafficExpenseDataVersion: nextTrafficVer,
     trafficExpenseSubmittedByIvId: trafficFlat,
@@ -691,18 +748,149 @@ app.post('/api/admin/public-url', (req, res) => {
   return res.json({ ok: true, publicUrl: normalized });
 });
 
+app.get('/api/push/public-key', (_req, res) => {
+  if (!webPushReady()) return res.json({ ok: false, enabled: false, publicKey: null });
+  return res.json({ ok: true, enabled: true, publicKey: VAPID_PUBLIC_KEY });
+});
+
+app.post('/api/push/subscribe', (req, res) => {
+  const userId = req.body && req.body.userId != null ? String(req.body.userId).trim() : '';
+  const subscription = req.body ? req.body.subscription : null;
+  if (!webPushReady()) return res.status(503).json({ ok: false, error: 'web-push-disabled' });
+  if (!userId) return res.status(400).json({ ok: false, error: 'userId-required' });
+  if (!upsertPushSubscription(userId, subscription)) {
+    return res.status(400).json({ ok: false, error: 'invalid-subscription' });
+  }
+  schedulePersist();
+  return res.json({ ok: true });
+});
+
+app.post('/api/push/unsubscribe', (req, res) => {
+  const userId = req.body && req.body.userId != null ? String(req.body.userId).trim() : '';
+  const endpoint = req.body && req.body.endpoint != null ? String(req.body.endpoint).trim() : '';
+  if (!userId || !endpoint) return res.status(400).json({ ok: false, error: 'userId-endpoint-required' });
+  const changed = removePushSubscription(userId, endpoint);
+  if (changed) schedulePersist();
+  return res.json({ ok: true, removed: changed });
+});
+
 app.use(express.static(ROOT));
+
+function collectNewMessagesByRoom(prevMessages, nextMessages) {
+  const out = [];
+  const prev = prevMessages && typeof prevMessages === 'object' ? prevMessages : {};
+  const next = nextMessages && typeof nextMessages === 'object' ? nextMessages : {};
+  for (const roomId of Object.keys(next)) {
+    const before = Array.isArray(prev[roomId]) ? prev[roomId] : [];
+    const after = Array.isArray(next[roomId]) ? next[roomId] : [];
+    if (!after.length) continue;
+    const beforeIds = new Set(before.map((m) => (m && m.id ? String(m.id) : '')));
+    for (const m of after) {
+      if (!m || typeof m !== 'object') continue;
+      const mid = m.id ? String(m.id) : '';
+      if (mid && beforeIds.has(mid)) continue;
+      if (!mid) {
+        const exists = before.some(
+          (x) =>
+            x &&
+            Number(x.ts) === Number(m.ts) &&
+            String(x.senderId || '') === String(m.senderId || '') &&
+            String(x.text || '') === String(m.text || '')
+        );
+        if (exists) continue;
+      }
+      out.push({ roomId, message: m });
+    }
+  }
+  return out;
+}
+
+function roomTitleForPush(room) {
+  if (!room) return 'H-채팅';
+  if (room.type === 'group' && room.name) return String(room.name);
+  return 'H-채팅';
+}
+
+async function sendWebPushToUser(userId, payloadObj) {
+  if (!webPushReady()) return;
+  const uid = String(userId || '').trim();
+  if (!uid) return;
+  const subs = shared.pushSubscriptionsByUser && Array.isArray(shared.pushSubscriptionsByUser[uid]) ? shared.pushSubscriptionsByUser[uid] : [];
+  if (!subs.length) return;
+  const body = JSON.stringify(payloadObj || {});
+  for (const sub of subs.slice()) {
+    try {
+      await webpush.sendNotification(sub, body, { TTL: 60 });
+    } catch (e) {
+      const sc = e && (e.statusCode || (e.body && e.body.statusCode));
+      if (sc === 404 || sc === 410) {
+        removePushSubscription(uid, sub && sub.endpoint);
+      }
+    }
+  }
+}
+
+async function emitPushForNewMessages(prevShared) {
+  if (!webPushReady()) return;
+  const rows = collectNewMessagesByRoom(prevShared && prevShared.messages, shared.messages);
+  if (!rows.length) return;
+  const roomById = new Map((Array.isArray(shared.rooms) ? shared.rooms : []).map((r) => [r.id, r]));
+  for (const row of rows) {
+    const room = roomById.get(row.roomId);
+    if (!room || !Array.isArray(room.memberIds)) continue;
+    const msg = row.message || {};
+    const senderId = String(msg.senderId || '');
+    const senderAcc = shared.accounts.find((a) => a.id === senderId);
+    const senderName = senderAcc && senderAcc.name ? String(senderAcc.name) : '누군가';
+    const text = String(msg.text || '').trim();
+    const preview = msg.video ? '동영상을 보냈습니다.' : msg.image ? (text && text !== '(사진)' ? `사진: ${text}` : '사진을 보냈습니다.') : text || '(내용 없음)';
+    for (const uid of room.memberIds) {
+      if (!uid || String(uid) === senderId) continue;
+      if (shared.chatNotifyMutedByUser && shared.chatNotifyMutedByUser[uid]) continue;
+      if (
+        shared.chatNotifyMutedRoomsByUser &&
+        shared.chatNotifyMutedRoomsByUser[uid] &&
+        shared.chatNotifyMutedRoomsByUser[uid][row.roomId]
+      ) {
+        continue;
+      }
+      await sendWebPushToUser(uid, {
+        type: 'chat-message',
+        roomId: row.roomId,
+        title: roomTitleForPush(room),
+        body: `${senderName}: ${preview}`,
+        url: '/',
+        tag: `chat-room-${row.roomId}`,
+      });
+    }
+  }
+}
 
 io.on('connection', (socket) => {
   socket.emit('shared:state', shared);
-  socket.on('shared:update', (payload) => {
+  socket.on('shared:update', async (payload) => {
+    const prevShared = { messages: shared.messages };
     mergeSharedUpdate(payload);
     schedulePersist();
     io.emit('shared:state', shared);
+    await emitPushForNewMessages(prevShared);
   });
 });
 
 async function bootstrap() {
+  if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
+    try {
+      webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+      webPushEnabled = true;
+      console.log('[H-채팅] Web Push 활성화');
+    } catch (e) {
+      webPushEnabled = false;
+      console.warn('[H-채팅] Web Push 비활성화(키 형식 오류):', e && e.message ? e.message : e);
+    }
+  } else {
+    webPushEnabled = false;
+    console.log('[H-채팅] Web Push 비활성화 (VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY 미설정)');
+  }
   if (useSupabase()) {
     console.log('[H-채팅] 저장소: Supabase (Postgres JSONB)');
     await initFromSupabase();
