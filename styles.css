@@ -1745,13 +1745,47 @@ h1 {
   display: none;
 }
 
+.check-list-section-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  padding: 0.45rem 0 0.2rem;
+  text-align: left;
+}
+
 .check-list-section-title {
   font-size: 0.72rem;
   font-weight: 700;
   color: var(--accent);
-  padding: 0.55rem 0 0.2rem;
   margin-top: 0.15rem;
   letter-spacing: 0.02em;
+}
+
+.check-list-section-count {
+  font-size: 0.68rem;
+  color: var(--muted);
+}
+
+.check-list-section-caret {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.check-list-section-body {
+  margin-top: 0.1rem;
+}
+
+.check-list-section.check-list-section--collapsed .check-list-section-body {
+  display: none;
+}
+
+.check-list-section.check-list-section--collapsed .check-list-section-caret {
+  transform: rotate(-90deg);
 }
 
 .check-list-section:first-child .check-list-section-title {

@@ -4502,22 +4502,27 @@
         byTeam[tk].push(u);
       }
     }
-    const section = (title, inner) =>
-      inner
-        ? `<div class="check-list-section"><div class="check-list-section-title">${escapeHtml(title)}</div>${inner}</div>`
-        : '';
+    const section = (key, title, rows) => {
+      if (!rows || !rows.length) return '';
+      const inner = rows.map(newChatMemberRowHtml).join('');
+      return `<div class="check-list-section" data-section-key="${escapeHtml(key)}">
+        <button type="button" class="check-list-section-toggle" data-section-key="${escapeHtml(key)}" aria-expanded="true">
+          <span class="check-list-section-title">${escapeHtml(title)}</span>
+          <span class="check-list-section-count">${rows.length}명</span>
+          <span class="check-list-section-caret">▾</span>
+        </button>
+        <div class="check-list-section-body">${inner}</div>
+      </div>`;
+    };
     let html = '';
-    html += section('연구원', sortByName(researchers).map(newChatMemberRowHtml).join(''));
-    html += section('슈퍼바이저', sortByName(supervisors).map(newChatMemberRowHtml).join(''));
+    html += section('researcher', '연구원', sortByName(researchers));
+    html += section('supervisor', '슈퍼바이저', sortByName(supervisors));
     for (const tid of TEAM_ORDER) {
       const list = byTeam[tid];
-      if (list && list.length) html += section(TEAMS[tid], sortByName(list).map(newChatMemberRowHtml).join(''));
+      if (list && list.length) html += section(`team-${tid}`, TEAMS[tid], sortByName(list));
     }
     if (unassigned.length)
-      html += section(
-        '면접원 · 팀 미지정',
-        sortByName(unassigned).map(newChatMemberRowHtml).join('')
-      );
+      html += section('team-unassigned', '면접원 · 팀 미지정', sortByName(unassigned));
     return html || '<p class="caption" style="padding:0.5rem 0">선택 가능한 멤버가 없습니다.</p>';
   }
 
@@ -4694,6 +4699,28 @@
     const projSearchIn = overlay.querySelector('#grp-project-search');
     const projResults = overlay.querySelector('#grp-project-results');
     const projAddTempBtn = overlay.querySelector('#btn-project-add-temp');
+    const grpMembersRoot = overlay.querySelector('#grp-members');
+    const collapsedSectionKeys = new Set(TEAM_ORDER.map((tid) => `team-${tid}`).concat(['team-unassigned']));
+    function applyMemberSectionCollapsedUi() {
+      if (!grpMembersRoot) return;
+      grpMembersRoot.querySelectorAll('.check-list-section').forEach((sec) => {
+        const key = sec.getAttribute('data-section-key') || '';
+        const collapsed = collapsedSectionKeys.has(key);
+        sec.classList.toggle('check-list-section--collapsed', collapsed);
+        const btn = sec.querySelector('.check-list-section-toggle');
+        if (btn) btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+      });
+    }
+    grpMembersRoot?.addEventListener('click', (ev) => {
+      const t = ev.target.closest('.check-list-section-toggle');
+      if (!t) return;
+      const key = t.getAttribute('data-section-key') || '';
+      if (!key) return;
+      if (collapsedSectionKeys.has(key)) collapsedSectionKeys.delete(key);
+      else collapsedSectionKeys.add(key);
+      applyMemberSectionCollapsedUi();
+    });
+    applyMemberSectionCollapsedUi();
     let newChatMode = 'dm';
     function setNewChatMode(next) {
       newChatMode = next === 'group' ? 'group' : 'dm';
@@ -4733,7 +4760,12 @@
         const labels = sec.querySelectorAll('.newchat-mem-label');
         const anyVisible = Array.from(labels).some((lab) => !lab.classList.contains('hidden'));
         sec.classList.toggle('check-list-section--empty', labels.length > 0 && !anyVisible);
+        if (q && anyVisible) {
+          const key = sec.getAttribute('data-section-key') || '';
+          if (key) collapsedSectionKeys.delete(key);
+        }
       });
+      applyMemberSectionCollapsedUi();
     }
     searchIn.addEventListener('input', applyNewChatSearchFilter);
     searchIn.addEventListener('search', applyNewChatSearchFilter);
