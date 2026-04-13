@@ -4656,18 +4656,21 @@
           </div>
           <div id="newchat-panel-group" class="hidden" style="margin-top:0.75rem">
             <div class="field">
-              <label for="grp-name">단체방 이름</label>
-              <input type="text" id="grp-name" placeholder="예: 4월 현장조사 TF" />
-            </div>
-            <div class="field">
-              <label for="grp-project-number">프로젝트 번호</label>
-              <input type="text" id="grp-project-number" placeholder="예: 2025-31-1948" autocomplete="off" />
+              <label for="grp-project-search">프로젝트 검색 (먼저 선택)</label>
               <div class="grp-project-search-wrap" style="display:flex;gap:0.5rem;align-items:center;margin-top:0.5rem;flex-wrap:wrap">
-                <input type="search" id="grp-project-search" class="grp-project-search-input" placeholder="프로젝트 검색 (번호/이름) · 입력 즉시 아래 결과 표시" autocomplete="off" style="flex:1 1 14rem" />
+                <input type="search" id="grp-project-search" class="grp-project-search-input" placeholder="프로젝트 검색 (번호/이름) · 선택 시 아래에 자동 적용" autocomplete="off" style="flex:1 1 14rem" />
                 <button type="button" class="btn btn-secondary" id="btn-project-add-temp" style="flex:0 0 auto">임시 등록</button>
               </div>
               <div id="grp-project-results" class="devbulk-search-results" role="listbox" aria-label="프로젝트 검색 결과" style="margin-top:0.5rem"></div>
-              <p class="caption" style="margin-top:0.35rem">검색창에 입력하면 결과가 바로 나타납니다. 목록에 없으면 번호/이름을 직접 입력한 뒤 <strong>임시 등록</strong>하세요. (프로젝트 목록 엑셀 반영은 서버의 <code>data/seed-projects.json</code>로 미리 넣어 둡니다.)</p>
+              <p class="caption" style="margin-top:0.35rem">검색 결과를 선택하면 아래 <strong>프로젝트 번호/단체방 이름</strong>에 자동 입력됩니다. 목록에 없으면 번호/이름을 직접 입력한 뒤 <strong>임시 등록</strong>하세요.</p>
+            </div>
+            <div class="field">
+              <label for="grp-project-number">프로젝트 번호 (자동 적용됨 · 필요시 수정)</label>
+              <input type="text" id="grp-project-number" placeholder="예: 2025-31-1948" autocomplete="off" />
+            </div>
+            <div class="field">
+              <label for="grp-name">단체방 이름 (자동 적용됨 · 필요시 수정)</label>
+              <input type="text" id="grp-name" placeholder="예: 4월 현장조사 TF" />
             </div>
             <div class="field">
               <fieldset style="border:none;margin:0;padding:0;min-width:0">
@@ -4888,7 +4891,7 @@
       const nm = btn.getAttribute('data-proj-name') || '';
       if (projNumIn) projNumIn.value = num;
       const grpNameIn = overlay.querySelector('#grp-name');
-      if (grpNameIn && !String(grpNameIn.value || '').trim()) grpNameIn.value = nm || num;
+      if (grpNameIn) grpNameIn.value = nm || num;
       if (projSearchIn) projSearchIn.value = '';
       if (projResults) projResults.innerHTML = '';
       showToast('프로젝트를 선택했습니다.');
