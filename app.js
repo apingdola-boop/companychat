@@ -5469,9 +5469,100 @@
     });
   }
 
+  function groupReadStatusForMessage(room, msg) {
+    if (!state.me || !room || room.type !== 'group' || !Array.isArray(room.memberIds) || !msg) return null;
+    if (msg.senderId !== state.me.id) return null;
+    const msgTs = Number(msg.ts) || 0;
+    const targets = room.memberIds.filter((id) => id && id !== state.me.id);
+    if (!targets.length) return { readIds: [], unreadIds: [], noTargets: true };
+    const readIds = [];
+    const unreadIds = [];
+    for (const uid of targets) {
+      const lastRead =
+        state.lastReadByUser && state.lastReadByUser[uid] && typeof state.lastReadByUser[uid][room.id] === 'number'
+          ? state.lastReadByUser[uid][room.id]
+          : 0;
+      if (lastRead >= msgTs) readIds.push(uid);
+      else unreadIds.push(uid);
+    }
+    return { readIds, unreadIds };
+  }
+
+  function groupReadReceiptHtml(room, msg) {
+    const status = groupReadStatusForMessage(room, msg);
+    if (!status) return '';
+    const { readIds, unreadIds, noTargets } = status;
+    if (noTargets) {
+      return `<span class="msg-read-receipt msg-read-receipt--muted">읽음 확인 대상 없음</span>`;
+    }
+    const toDisplayNames = (ids) =>
+      ids
+        .map((id) => {
+          const u = userById(id);
+          return u && u.name ? String(u.name) : '알 수 없음';
+        })
+        .filter(Boolean);
+    const unreadNames = toDisplayNames(unreadIds);
+    const readNames = toDisplayNames(readIds);
+    const unreadPart = unreadIds.length
+      ? `안읽음 ${unreadIds.length}명(${unreadNames.slice(0, 3).join(', ')}${unreadIds.length > 3 ? ' 외' : ''})`
+      : '모두 읽음';
+    const readPart = readIds.length
+      ? `읽음 ${readIds.length}명(${readNames.slice(0, 2).join(', ')}${readIds.length > 2 ? ' 외' : ''})`
+      : `읽음 0명`;
+    return `<button type="button" class="msg-read-receipt" data-read-receipt-msg-id="${escapeHtml(String(msg.id || ''))}" title="실명 읽음 현황 보기">${escapeHtml(
+      readPart + ' · ' + unreadPart
+    )}</button>`;
+  }
+
+  function openGroupReadStatusModal(roomId, msgId) {
+    const room = state.rooms.find((r) => r.id === roomId);
+    if (!room || room.type !== 'group') return;
+    const msgs = state.messages[roomId] || [];
+    const msg = msgs.find((m) => String(m.id || '') === String(msgId || ''));
+    if (!msg) return;
+    const status = groupReadStatusForMessage(room, msg);
+    if (!status) return;
+    const toRows = (ids) =>
+      ids
+        .map((id) => {
+          const u = userById(id);
+          const nm = u && u.name ? u.name : '알 수 없음';
+          const role = u && u.role && ROLES[u.role] ? ROLES[u.role].label : '';
+          const team = u && u.role === 'interviewer' && teamLabel(u.team) ? ` · ${teamLabel(u.team)}` : '';
+          return `<li>${escapeHtml(nm)}${role ? ` <span class="caption">(${escapeHtml(role + team)})</span>` : ''}</li>`;
+        })
+        .join('');
+    const readHtml = status.readIds.length ? `<ul class="read-status-list">${toRows(status.readIds)}</ul>` : '<p class="caption">아직 없습니다.</p>';
+    const unreadHtml = status.unreadIds.length
+      ? `<ul class="read-status-list">${toRows(status.unreadIds)}</ul>`
+      : '<p class="caption">없음 (전원 읽음)</p>';
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay centered';
+    overlay.innerHTML = `
+      <div class="modal centered-box" style="max-height:82vh;max-width:520px">
+        <div class="modal-head">읽음 현황 · ${escapeHtml(formatTime(msg.ts))}</div>
+        <div class="modal-body">
+          <div class="field"><label>읽음 (${status.readIds.length}명)</label>${readHtml}</div>
+          <div class="field"><label>안읽음 (${status.unreadIds.length}명)</label>${unreadHtml}</div>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-primary" id="read-status-close">닫기</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    const close = () => overlay.remove();
+    overlay.querySelector('#read-status-close')?.addEventListener('click', close);
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) close();
+    });
+  }
+
   /** 채팅 말풍선 HTML — shared:state 시 목록만 갈아끼울 때도 동일 규칙 사용 */
   function chatBubbleRowsHtml(roomId) {
     const msgs = state.messages[roomId] || [];
+    const room = state.rooms.find((r) => r.id === roomId);
     if (!state.me) return '';
     return msgs
       .map((m) => {
@@ -5505,6 +5596,7 @@
             ${!isMe ? `<div class="bubble-sender">${escapeHtml(name)}${senderTeam}</div>` : ''}
             <div class="bubble${annClass}">${escapeHtml(m.text).replace(/\n/g, '<br/>')}${mediaHtml}</div>
             <div class="msg-time">${formatTime(m.ts)}</div>
+            ${isMe ? groupReadReceiptHtml(room, m) : ''}
           </div>
         `;
       })
@@ -5554,7 +5646,7 @@
 
     const annStrip =
       state.me.role === 'supervisor' && !room.isAnnounceFeed
-        ? `<div class="ann-bar"><span>이 방은 일반 채팅입니다. 헤더의「공지」는 전체 공지용입니다.</span></div>`
+        ? `<div class="ann-bar"><span>이 방은 단체 채팅방입니다. 헤더의「공지」는 전체 공지용입니다.</span></div>`
         : room.isAnnounceFeed
           ? `<div class="ann-bar"><span>전체 공지 피드 (슈퍼바이저가 보낸 공지가 쌓입니다)</span></div>`
           : '';
@@ -5701,6 +5793,12 @@
     if (list) list.scrollTop = list.scrollHeight;
 
     list?.addEventListener('click', (ev) => {
+      const rc = ev.target.closest('.msg-read-receipt');
+      if (rc) {
+        const mid = rc.getAttribute('data-read-receipt-msg-id');
+        if (mid) openGroupReadStatusModal(view.roomId, mid);
+        return;
+      }
       const img = ev.target.closest('img.chat-img');
       if (!img) return;
       const src = img.getAttribute('src') || '';

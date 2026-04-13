@@ -1457,6 +1457,37 @@ h1 {
   text-align: right;
 }
 
+.msg-read-receipt {
+  display: inline-block;
+  margin-top: 0.1rem;
+  padding: 0 0.25rem;
+  font-size: 0.65rem;
+  color: var(--muted);
+  text-align: right;
+  opacity: 0.95;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.msg-read-receipt:hover {
+  text-decoration: underline;
+}
+
+.msg-read-receipt.msg-read-receipt--muted {
+  text-decoration: none;
+  cursor: default;
+}
+
+.read-status-list {
+  margin: 0.25rem 0 0;
+  padding-left: 1rem;
+}
+
+.read-status-list li {
+  margin: 0.2rem 0;
+}
+
 .input-bar {
   flex-shrink: 0;
   position: relative;
