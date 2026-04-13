@@ -4627,16 +4627,16 @@
       <div class="modal">
         <div class="modal-head">새 채팅</div>
         <div class="modal-body">
-          <div class="field">
-            <label for="newchat-search">이름·아이디 검색</label>
-            <input type="search" id="newchat-search" placeholder="이름 또는 @아이디" autocomplete="off" />
-            <p class="caption" style="margin-top:0.35rem">검색은 1:1/단체방 목록에 함께 적용됩니다. <strong>1:1 탭</strong>에서 상대가 한 명만 남으면 자동 선택되며, <strong>Enter</strong>로 바로 1:1 방을 열 수 있습니다.</p>
-          </div>
           <div class="tabs tabs-compact" style="margin-top:0.3rem">
             <button type="button" class="tab active" id="newchat-tab-dm">1:1</button>
             <button type="button" class="tab" id="newchat-tab-group">단체방</button>
           </div>
           <div id="newchat-panel-dm" style="margin-top:0.75rem">
+            <div class="field">
+              <label for="newchat-search-dm">이름·아이디 검색</label>
+              <input type="search" id="newchat-search-dm" placeholder="이름 또는 @아이디" autocomplete="off" />
+              <p class="caption" style="margin-top:0.35rem">상대가 <strong>한 명만</strong> 남으면 자동 선택됩니다. 같은 상태에서 <strong>Enter</strong>를 누르면 바로 1:1 방이 열립니다.</p>
+            </div>
             <div class="field">
               <label for="dm-select">1:1 대화 — 상대 선택</label>
               <select id="dm-select" class="field" style="margin-top:0.35rem">
@@ -4662,16 +4662,17 @@
             <div class="field">
               <label for="grp-project-number">프로젝트 번호</label>
               <input type="text" id="grp-project-number" placeholder="예: 2025-31-1948" autocomplete="off" />
-              <div style="display:flex;gap:0.5rem;align-items:center;margin-top:0.5rem;flex-wrap:wrap">
-                <input type="search" id="grp-project-search" placeholder="프로젝트 검색 (번호/이름)" autocomplete="off" style="flex:1 1 14rem" />
+              <div class="grp-project-search-wrap" style="display:flex;gap:0.5rem;align-items:center;margin-top:0.5rem;flex-wrap:wrap">
+                <input type="search" id="grp-project-search" class="grp-project-search-input" placeholder="프로젝트 검색 (번호/이름) · 입력 즉시 아래 결과 표시" autocomplete="off" style="flex:1 1 14rem" />
                 <button type="button" class="btn btn-secondary" id="btn-project-add-temp" style="flex:0 0 auto">임시 등록</button>
               </div>
               <div id="grp-project-results" class="devbulk-search-results" role="listbox" aria-label="프로젝트 검색 결과" style="margin-top:0.5rem"></div>
-              <p class="caption" style="margin-top:0.35rem">프로젝트를 검색해서 선택할 수 있습니다. 목록에 없으면 번호/이름을 직접 입력한 뒤 <strong>임시 등록</strong>하세요. (프로젝트 목록 엑셀 반영은 서버의 <code>data/seed-projects.json</code>로 미리 넣어 둡니다.)</p>
+              <p class="caption" style="margin-top:0.35rem">검색창에 입력하면 결과가 바로 나타납니다. 목록에 없으면 번호/이름을 직접 입력한 뒤 <strong>임시 등록</strong>하세요. (프로젝트 목록 엑셀 반영은 서버의 <code>data/seed-projects.json</code>로 미리 넣어 둡니다.)</p>
             </div>
             <div class="field">
               <fieldset style="border:none;margin:0;padding:0;min-width:0">
               <legend style="font-size:0.8rem;color:var(--muted);margin-bottom:0.35rem;padding:0">멤버 선택</legend>
+              <input type="search" id="newchat-search-group" placeholder="이름·아이디로 멤버 검색" autocomplete="off" style="margin-bottom:0.45rem" />
               <div class="newchat-member-scroll">
               <div class="check-list" id="grp-members">
                 ${groupNewChatMembersChecklistHtml(others)}
@@ -4689,7 +4690,8 @@
     `;
     document.body.appendChild(overlay);
 
-    const searchIn = overlay.querySelector('#newchat-search');
+    const dmSearchIn = overlay.querySelector('#newchat-search-dm');
+    const groupSearchIn = overlay.querySelector('#newchat-search-group');
     const dmSelect = overlay.querySelector('#dm-select');
     const tabDm = overlay.querySelector('#newchat-tab-dm');
     const tabGroup = overlay.querySelector('#newchat-tab-group');
@@ -4732,8 +4734,8 @@
     tabDm?.addEventListener('click', () => setNewChatMode('dm'));
     tabGroup?.addEventListener('click', () => setNewChatMode('group'));
     setNewChatMode('dm');
-    function applyNewChatSearchFilter() {
-      const q = searchIn.value || '';
+    function applyDmSearchFilter() {
+      const q = dmSearchIn ? dmSearchIn.value || '' : '';
       Array.from(dmSelect.options).forEach((opt, idx) => {
         if (idx === 0 || !opt.value) {
           opt.hidden = false;
@@ -4750,6 +4752,10 @@
         const curStill = visibleDmOpts.some((o) => o.value === cur);
         if (!curStill) dmSelect.value = '';
       }
+    }
+
+    function applyGroupMemberSearchFilter() {
+      const q = groupSearchIn ? groupSearchIn.value || '' : '';
       overlay.querySelectorAll('#grp-members .newchat-mem-label').forEach((lab) => {
         const id = lab.getAttribute('data-mem-id');
         const u = others.find((x) => x.id === id);
@@ -4767,17 +4773,20 @@
       });
       applyMemberSectionCollapsedUi();
     }
-    searchIn.addEventListener('input', applyNewChatSearchFilter);
-    searchIn.addEventListener('search', applyNewChatSearchFilter);
-    searchIn.addEventListener('keydown', (e) => {
+    dmSearchIn?.addEventListener('input', applyDmSearchFilter);
+    dmSearchIn?.addEventListener('search', applyDmSearchFilter);
+    dmSearchIn?.addEventListener('keydown', (e) => {
       if (e.key !== 'Enter') return;
       e.preventDefault();
-      applyNewChatSearchFilter();
-      if (newChatMode !== 'dm') return;
+      applyDmSearchFilter();
       const sid = dmSelect.value;
       if (!sid) return;
       overlay.querySelector('#btn-dm').click();
     });
+    groupSearchIn?.addEventListener('input', applyGroupMemberSearchFilter);
+    groupSearchIn?.addEventListener('search', applyGroupMemberSearchFilter);
+    applyDmSearchFilter();
+    applyGroupMemberSearchFilter();
 
     function close() {
       overlay.remove();
